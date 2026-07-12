@@ -138,7 +138,7 @@ videos(id, yt_video_id UNIQUE, channel_id, title, description,
 scores(video_id FK, overall REAL, info_density, originality,
        clickbait_gap, padding, depth, production,
        hard_flags TEXT, summary TEXT, rationale TEXT,
-       model TEXT, scored_at)
+       model TEXT, prompt_version INTEGER, scored_at)
 feedback(video_id FK, verdict TEXT CHECK(verdict IN ('great','slop')), created_at)
 settings(key, value)  -- threshold, weights JSON, schedule
 ```
@@ -159,7 +159,7 @@ settings(key, value)  -- threshold, weights JSON, schedule
 1. **M1 — Connect & Ingest:** DB schema, Google OAuth flow, subscription sync, ingest worker pulling metadata into SQLite. *Done when: connecting a Google account populates the user's subscriptions and their recent videos.*
 2. **M2 — Scoring:** Transcript fetch + LLM scoring pipeline with structured output and retry handling. *Done when: every ingested video gets a score row and rationale.*
 3. **M3 — Feed UI:** Ranked feed, detail view with breakdown, threshold filter. *Done when: user can browse the curated feed end to end.*
-4. **M4 — Tuning:** Settings UI for weights/threshold, feedback buttons, and a simple audit view comparing user verdicts vs. scores.
+4. **M4 — Tuning:** Settings UI for weights/threshold, feedback buttons, and the calibration audit view. The audit view shows two agreement tiles (percentage plus verdict count per class, marked provisional until 20 great and 20 slop verdicts exist) and a disagreement list: greats scored below threshold and slop scored above, sorted by distance from threshold, each row showing the six dimension scores. Agreement recomputes each video's overall live from its stored dimension scores using current weights against the current threshold, so tuning the slider or weights updates the numbers instantly with no re-scoring. Tiles and list cover only videos scored under the current model and prompt version.
 
 ## 11. Cost & Quota Estimates
 
@@ -172,7 +172,7 @@ settings(key, value)  -- threshold, weights JSON, schedule
 
 - **Google OAuth app verification:** `youtube.readonly` is a sensitive scope. A personal OAuth client in "Testing" mode expires refresh tokens every 7 days (forcing weekly re-login). Mitigation: set the OAuth consent screen's publishing status to "In production" without submitting for verification — Google shows an "unverified app" warning at consent (fine for personal use, cap of 100 users) but refresh tokens then persist. Document this in setup instructions.
 - **Transcript unavailable** (disabled, auto-caption missing, non-English): score metadata-only with confidence penalty; surface as "unscored" section rather than hiding.
-- **LLM rubric drift / miscalibration:** the feedback loop (user verdicts vs. scores) exists specifically to audit this; iterate on the rubric prompt, not the architecture.
+- **LLM rubric drift / miscalibration:** the feedback loop (user verdicts vs. scores) exists specifically to audit this; iterate on the rubric prompt, not the architecture. Prompt changes are gated: allowed only after the agreement bar fails with a valid sample (20 verdicts per class), one change at a time, informed by the audit's disagreement list. The prompt carries an integer version constant in code, bumped on every change and written to `scores.prompt_version`. Score rows are final once written and never re-scored after a prompt change, matching the model-switch rule; each prompt change starts a fresh accumulation toward the 20-per-class floor, and old versions stay queryable for before-after comparison.
 - **Genre bias:** transcript-based scoring penalizes visual-first content (art, gameplay). MVP accepts this; note it in UI. Later: per-genre rubrics.
 - **YouTube API/ToS constraints:** metadata via official API only; transcripts via public caption endpoints; personal use.
 
@@ -185,3 +185,5 @@ settings(key, value)  -- threshold, weights JSON, schedule
 ## 14. Success Criteria
 
 After 2 weeks of daily use: the user opens this feed instead of YouTube's homepage, and ≥80% of videos they mark "great" scored above threshold while ≥80% marked "slop" scored below it.
+
+Calibration is organic-only: no seeded golden set, verdicts accumulate from daily use. The 80% bar is valid only once at least 20 great and 20 slop verdicts exist; two weeks is an expectation, not a trigger, and below the floor the audit view shows agreement as provisional. Agreement is always evaluated against current settings (current weights recompute overall from stored dimension scores, compared to the current threshold) and scoped to the current model and prompt version.
