@@ -147,7 +147,7 @@ settings(key, value)  -- threshold, weights JSON, schedule
 
 - **Backend:** Python (FastAPI) — best library support for `youtube-transcript-api` and `google-api-python-client`
 - **DB:** SQLite (single user, zero ops)
-- **Frontend:** Server-rendered templates (Jinja2) or a minimal React/Vite app — keep it simple
+- **Frontend:** Server-rendered Jinja2 templates on FastAPI. No React, no Vite, no Node build step. htmx, vendored as a static file (no CDN), powers the one no-reload interaction: the great or slop feedback buttons post the verdict via `hx-post` and the server returns a rendered button-state snippet; the same pattern extends if later milestones need more no-reload spots. The threshold slider and all settings pages are plain HTML forms, submit and reload. Styling is Pico.css, vendored, classless, plus a small `custom.css` for app-specific bits like score badges.
 - **Scoring:** OpenAI-compatible client (`openai` Python package with custom `base_url`) — default model `gemini-3.1-flash-lite` on Google AI Studio free tier; `deepseek-v4-flash` (non-thinking) as alternate; provider swappable via config
 - **Auth:** `google-auth-oauthlib` + `google-api-python-client` for the OAuth flow and YouTube API calls; localhost redirect URI for the desktop-style flow
 - **Scheduler:** APScheduler in-process, or system cron hitting a CLI command
