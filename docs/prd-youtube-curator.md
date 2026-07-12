@@ -179,7 +179,6 @@ settings(key, value)  -- threshold, weights JSON, schedule
 - Truncation strategy for very long transcripts: head+tail sampling vs. chunk-and-summarize
 - Whether to backfill a channel's history on add, or only score new uploads going forward
 - English-only for MVP, or pass non-English transcripts through as-is (modern LLMs handle them fine — cost is the only concern)
-- Whether to add a `SCORING_FALLBACK_MODEL` that automatically retries on a second provider when the primary hits rate limits or outages
 
 ## 14. Success Criteria
 
