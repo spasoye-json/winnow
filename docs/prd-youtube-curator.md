@@ -76,7 +76,7 @@ A personal web app that builds an alternative YouTube feed ranked by **content q
 **Scoring worker**
 - For each unscored video: send transcript (truncated to ~15k tokens if longer) + metadata to the configured LLM with the scoring rubric prompt
 - **Provider-agnostic design:** use a single OpenAI-compatible chat-completions client where `base_url`, `model`, and `api_key` come from settings/env. Supported out of the box:
-  - `gemini-3.5-flash` via Google AI Studio's OpenAI-compatible endpoint — **default** (free tier: 1,500 requests/day, far above expected ~50/day volume → $0)
+  - `gemini-3.1-flash-lite` via Google AI Studio's OpenAI-compatible endpoint — **default** (measured free-tier limits for this project: 500 requests/day, 15 RPM, 250k input TPM — comfortably above expected ~50/day volume → $0; source of truth is the project's AI Studio rate-limit page, limits are per-project and not guaranteed). `gemini-3.5-flash` is limited to 20 requests/day on this project's free tier and is not wired into the pipeline
   - `deepseek-v4-flash` via `https://api.deepseek.com` — near-free fallback (~$0.14/M input; automatic prefix caching cuts the repeated rubric prompt to ~$0.0028/M). **Important:** disable thinking mode (non-thinking variant) — reasoning tokens bill as output and add nothing to a rubric-scoring task
   - Any Claude model via the Anthropic-compatible path if the user later prefers it
 - Prompt structure must put the static rubric/system prompt first and the per-video transcript last, byte-identical prefix across calls, to maximize provider-side prompt caching
@@ -147,7 +147,7 @@ settings(key, value)  -- threshold, weights JSON, schedule
 - **Backend:** Python (FastAPI) — best library support for `youtube-transcript-api` and `google-api-python-client`
 - **DB:** SQLite (single user, zero ops)
 - **Frontend:** Server-rendered templates (Jinja2) or a minimal React/Vite app — keep it simple
-- **Scoring:** OpenAI-compatible client (`openai` Python package with custom `base_url`) — default model `gemini-3.5-flash` on Google AI Studio free tier; `deepseek-v4-flash` (non-thinking) as alternate; provider swappable via config
+- **Scoring:** OpenAI-compatible client (`openai` Python package with custom `base_url`) — default model `gemini-3.1-flash-lite` on Google AI Studio free tier; `deepseek-v4-flash` (non-thinking) as alternate; provider swappable via config
 - **Auth:** `google-auth-oauthlib` + `google-api-python-client` for the OAuth flow and YouTube API calls; localhost redirect URI for the desktop-style flow
 - **Scheduler:** APScheduler in-process, or system cron hitting a CLI command
 - **Secrets:** `.env` file — `YOUTUBE_API_KEY`, `SCORING_BASE_URL`, `SCORING_MODEL`, `SCORING_API_KEY`
