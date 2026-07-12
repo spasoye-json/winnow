@@ -103,7 +103,7 @@ Each dimension scored 0–10 by the LLM. Overall score = weighted average (weigh
 | Depth & rigor | 15% | Sources cited, nuance, acknowledges counterpoints vs. surface-level hot takes |
 | Production integrity | 5% | Signs of AI-generated narration/script farms, mass-produced templates |
 
-**Hard flags** (auto-fail below threshold regardless of score): detected AI voice content farm, transcript is <20% of what duration implies (pure visual filler is fine for some genres — make this flag genre-aware or user-toggleable).
+**Hard flags** (auto-fail below threshold regardless of score): detected AI voice content farm, transcript is <20% of what duration implies. The low-transcript flag is exemptable per channel via `channels.exempt_low_transcript` (default off), surfaced as a checkbox in the settings channel list alongside `excluded`; pure visual filler is fine for some genres and this is the escape hatch. Exempt channels skip only the hard flag — all six dimensions, including padding, are still scored normally. The 20% ratio is fixed, not user-configurable.
 
 **Scoring prompt requirements:**
 - System prompt defines each dimension with 2–3 concrete examples of high and low scores
@@ -129,7 +129,8 @@ Each dimension scored 0–10 by the LLM. Overall score = weighted average (weigh
 oauth_credentials(id, provider TEXT DEFAULT 'google', refresh_token TEXT,
                   access_token TEXT, expires_at, scopes TEXT, connected_at)
 channels(id, yt_channel_id UNIQUE, name, source TEXT CHECK(source IN ('subscription','manual')),
-         excluded INTEGER DEFAULT 0, active INTEGER DEFAULT 1, added_at, last_synced_at)
+         excluded INTEGER DEFAULT 0, exempt_low_transcript INTEGER DEFAULT 0,
+         active INTEGER DEFAULT 1, added_at, last_synced_at)
 topics(id, query, added_at, active)
 videos(id, yt_video_id UNIQUE, channel_id, title, description,
        duration_sec, published_at, view_count, thumbnail_url,
