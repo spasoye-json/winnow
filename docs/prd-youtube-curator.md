@@ -47,7 +47,7 @@ A personal web app that builds an alternative YouTube feed ranked by **content q
 ```
 [Google OAuth] → [Subscription Sync] ─┐
                                       ▼
-[Scheduler (cron)] → [Ingest Worker] → [SQLite DB] ← [Scoring Worker] → [Anthropic API]
+[Async loop (in-process)] → [Ingest Worker] → [SQLite DB] ← [Scoring Worker] → [LLM API]
                           ↓                                ↓
                    [YouTube Data API]              [Transcript fetcher]
 
@@ -63,7 +63,7 @@ A personal web app that builds an alternative YouTube feed ranked by **content q
 - Store refresh token locally (encrypted at rest or OS keychain; `.env`-adjacent file acceptable for a personal local tool)
 - Manual channels (`source='manual'`) and topic queries remain supported as optional supplements; per-channel `excluded` flag lets the user mute a subscription without unsubscribing on YouTube
 
-**Ingest worker** (runs on schedule, e.g. every 6 hours)
+**Ingest worker** (runs when due: last successful ingest older than 6 hours)
 - Runs subscription sync first, then pulls latest videos from the upload playlists of all active, non-excluded channels, plus optional topic search queries
 - Uses YouTube Data API v3 (free tier: 10,000 quota units/day — budget queries accordingly; `search.list` costs 100 units, `playlistItems.list` costs 1 unit, so prefer channel upload playlists over search)
 - Stores video metadata: id, title, channel, description, duration, publish date, view count, thumbnail URL
@@ -150,7 +150,8 @@ settings(key, value)  -- threshold, weights JSON, schedule
 - **Frontend:** Server-rendered Jinja2 templates on FastAPI. No React, no Vite, no Node build step. htmx, vendored as a static file (no CDN), powers the one no-reload interaction: the great or slop feedback buttons post the verdict via `hx-post` and the server returns a rendered button-state snippet; the same pattern extends if later milestones need more no-reload spots. The threshold slider and all settings pages are plain HTML forms, submit and reload. Styling is Pico.css, vendored, classless, plus a small `custom.css` for app-specific bits like score badges.
 - **Scoring:** OpenAI-compatible client (`openai` Python package with custom `base_url`) — default model `gemini-3.1-flash-lite` on Google AI Studio free tier; `deepseek-v4-flash` (non-thinking) as alternate; provider swappable via config
 - **Auth:** `google-auth-oauthlib` + `google-api-python-client` for the OAuth flow and YouTube API calls; localhost redirect URI for the desktop-style flow
-- **Scheduler:** APScheduler in-process, or system cron hitting a CLI command
+- **Scheduler:** plain asyncio background loop in the FastAPI process, no APScheduler and no cron. The loop ticks every 5 minutes and evaluates due-conditions from SQLite state: ingest runs when the last successful ingest is older than 6 hours; scoring runs when unscored videos exist and the current Pacific-day request count is under the 200-request self-cap (10s pacing, backoff, and circuit breaker per section 6). Sleep and wake need no special handling: the next awake tick runs whatever is overdue, so there are no missed-run bookkeeping or systemd sleep hooks
+- **Runtime:** one long-lived process, started by a systemd user unit enabled at login (`WantedBy=default.target`, `Restart=on-failure`), logs via `journalctl --user`. The repo ships the unit file and an install target
 - **Secrets:** `.env` file — `YOUTUBE_API_KEY`, `SCORING_BASE_URL`, `SCORING_MODEL`, `SCORING_API_KEY`
 
 ## 10. MVP Milestones
