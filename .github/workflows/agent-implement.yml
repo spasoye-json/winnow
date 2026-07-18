@@ -30,37 +30,19 @@ jobs:
         run: |
           set -euo pipefail
           sub_count=$(gh api "repos/${GH_REPO}/issues/${ISSUE_NUMBER}/sub_issues" --jq 'length' 2>/dev/null || echo "0")
-          owner="${GH_REPO%/*}"
-          repo="${GH_REPO#*/}"
-          parent_number=$(gh api graphql \
-            -f query='query($owner: String!, $repo: String!, $num: Int!) { repository(owner: $owner, name: $repo) { issue(number: $num) { parent { number } } } }' \
-            -f owner="$owner" -f repo="$repo" -F num="$ISSUE_NUMBER" \
-            --jq '.data.repository.issue.parent.number // empty' 2>/dev/null || echo "")
           if [ "$sub_count" != "0" ]; then
-            echo "proceed=false" >> "$GITHUB_OUTPUT"
-          elif [ -n "$parent_number" ]; then
             echo "proceed=false" >> "$GITHUB_OUTPUT"
           else
             echo "proceed=true" >> "$GITHUB_OUTPUT"
           fi
           echo "sub_count=$sub_count" >> "$GITHUB_OUTPUT"
-          echo "parent_number=$parent_number" >> "$GITHUB_OUTPUT"
-
-      - name: Refuse sub-issue
-        if: steps.shape.outputs.sub_count == '0' && steps.shape.outputs.parent_number != ''
-        env:
-          PARENT_NUMBER: ${{ steps.shape.outputs.parent_number }}
-        run: |
-          gh issue edit "$ISSUE_NUMBER" --remove-label "agent:implement" || true
-          gh issue edit "$ISSUE_NUMBER" --add-label "agent:blocked" || true
-          gh issue comment "$ISSUE_NUMBER" --body "Refused to run: this issue is a sub-issue of #${PARENT_NUMBER}. Label the parent issue instead."
 
       - name: Refuse PRD-shaped issue
         if: steps.shape.outputs.sub_count != '0'
         run: |
           gh issue edit "$ISSUE_NUMBER" --remove-label "agent:implement" || true
           gh issue edit "$ISSUE_NUMBER" --add-label "agent:blocked" || true
-          gh issue comment "$ISSUE_NUMBER" --body "Refused to run: issue #${ISSUE_NUMBER} has sub-issues, but this MVP only supports standalone issues. Remove the sub-issues or implement the PRD workflow before retrying."
+          gh issue comment "$ISSUE_NUMBER" --body "Refused to run: issue #${ISSUE_NUMBER} has sub-issues. Label a leaf sub-issue (a build ticket) instead."
 
       - name: Preflight existing PR
         if: steps.shape.outputs.proceed == 'true'
