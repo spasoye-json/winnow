@@ -1,0 +1,210 @@
+name: Agent Implement PR
+
+on:
+  pull_request_target:
+    types: [labeled]
+
+jobs:
+  implement-pr:
+    if: github.event.label.name == 'agent:implement'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    concurrency:
+      group: agent-mutate-pr-${{ github.event.pull_request.number }}
+      cancel-in-progress: false
+    permissions:
+      contents: write
+      pull-requests: write
+
+    env:
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      BRANCH: ${{ github.event.pull_request.head.ref }}
+      BRANCH_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+      BASE_BRANCH: ${{ github.event.repository.default_branch }}
+
+    steps:
+      - name: Refuse closed PR
+        if: github.event.pull_request.state != 'open'
+        run: |
+          gh pr edit "$PR_NUMBER" --remove-label "agent:implement" || true
+          gh pr comment "$PR_NUMBER" --body "Refused to run: PR #${PR_NUMBER} is not open."
+
+      - name: Transition labels
+        if: github.event.pull_request.state == 'open'
+        run: |
+          gh pr edit "$PR_NUMBER" --remove-label "agent:implement" || true
+          gh pr edit "$PR_NUMBER" --remove-label "agent:blocked" || true
+          gh pr edit "$PR_NUMBER" --add-label "agent:in-progress"
+
+      - name: Checkout PR branch
+        if: github.event.pull_request.state == 'open'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          # The agent runs unsandboxed with this checkout as its cwd, so never
+          # leave the token in .git/config. Prepare-branch and Push below
+          # re-authenticate explicitly.
+          persist-credentials: false
+
+      - name: Prepare branch
+        if: github.event.pull_request.state == 'open'
+        run: |
+          # persist-credentials: false left origin without auth, so fetch the
+          # base over an explicit token URL (Actions masks the secret in logs).
+          auth_url="https://x-access-token:${GH_TOKEN}@github.com/${GH_REPO}.git"
+          git fetch "$auth_url" "$BASE_BRANCH:$BASE_BRANCH" || git fetch "$auth_url" "$BASE_BRANCH"
+          git checkout "$BRANCH" 2>/dev/null || git checkout -B "$BRANCH"
+          git config user.name "sandcastle-agent[bot]"
+          git config user.email "sandcastle-agent[bot]@users.noreply.github.com"
+
+      # pull_request_target runs with secrets and write permissions, so all
+      # tooling (lockfile install scripts, orchestration scripts, prompts)
+      # must come from the base branch. The PR checkout above is data only.
+      - name: Checkout base tooling
+        if: github.event.pull_request.state == 'open'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 1
+          sparse-checkout: .sandcastle
+          path: .base-tooling
+          # This copy is reachable by the unsandboxed agent too, so it must not
+          # persist the token either. It only runs npm ci, which needs no git auth.
+          persist-credentials: false
+
+      # actions/checkout only allows paths inside the workspace, and the
+      # workspace is the PR worktree, so move the tooling out before any
+      # agent runs to keep it out of repo-wide git staging.
+      - name: Move base tooling out of the workspace
+        if: github.event.pull_request.state == 'open'
+        run: mv "$GITHUB_WORKSPACE/.base-tooling" "$RUNNER_TEMP/base-tooling"
+
+      - name: Setup Node.js
+        if: github.event.pull_request.state == 'open'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        if: github.event.pull_request.state == 'open'
+        run: cd "$RUNNER_TEMP/base-tooling" && npm ci
+
+
+      - name: Install Claude Code
+        if: github.event.pull_request.state == 'open'
+        # Pinned so upgrades are deliberate; bump this version on purpose.
+        run: npm install -g @anthropic-ai/claude-code@2.1.205
+
+      - name: Run implement-PR agent
+        if: github.event.pull_request.state == 'open'
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          OUTPUT_DIR: ${{ runner.temp }}
+        run: |
+          "$RUNNER_TEMP/base-tooling/node_modules/.bin/tsx" "$RUNNER_TEMP/base-tooling/.sandcastle/agent-workflows/implement-pr/implement-pr.ts"
+
+      - name: Push branch
+        if: github.event.pull_request.state == 'open' && success()
+        env:
+          # Push with AGENT_PAT when configured so the push retriggers CI
+          # and the required check runs on the new head. Pushes made with
+          # GITHUB_TOKEN fire no workflows, leaving the PR head unverified.
+          GH_TOKEN: ${{ secrets.AGENT_PAT || secrets.GITHUB_TOKEN }}
+        run: |
+          if [ "$(cat "${RUNNER_TEMP}/has_commits.txt")" != "true" ]; then
+            echo "No commits to push."
+            exit 0
+          fi
+          # persist-credentials: false left origin without auth; re-authenticate
+          # for the push (Actions masks GITHUB_TOKEN in logs).
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${GH_REPO}.git"
+          set +e
+          git push --force-with-lease="refs/heads/$BRANCH:$BRANCH_HEAD_SHA" origin "$BRANCH" 2> push_err.txt
+          status=$?
+          set -e
+          if [ $status -ne 0 ]; then
+            if grep -qiE "non-fast-forward|rejected|fetch first|stale info" push_err.txt; then
+              echo "Branch advanced during implement-PR run." > "${RUNNER_TEMP}/failure_reason.txt"
+              cat push_err.txt
+              exit 1
+            fi
+            cat push_err.txt
+            exit $status
+          fi
+
+      - name: Post thread replies
+        if: github.event.pull_request.state == 'open' && success()
+        env:
+          REPLIES: ${{ runner.temp }}/implement_thread_replies.json
+        run: |
+          count=$(jq 'length' "$REPLIES")
+          if [ "$count" -eq 0 ]; then
+            exit 0
+          fi
+          for i in $(seq 0 $((count - 1))); do
+            commentId=$(jq -r ".[$i].commentId" "$REPLIES")
+            body=$(jq -r ".[$i].body" "$REPLIES")
+            rest_id=$(gh api graphql -f query="query(\$id:ID!){ node(id:\$id){ ... on PullRequestReviewComment { databaseId } } }" -F id="$commentId" --jq '.data.node.databaseId')
+            if [ -z "$rest_id" ] || [ "$rest_id" = "null" ]; then
+              echo "Could not resolve REST id for $commentId; skipping" >&2
+              continue
+            fi
+            gh api --method POST "repos/{owner}/{repo}/pulls/${PR_NUMBER}/comments/${rest_id}/replies" -f body="$body"
+          done
+
+      - name: Post inline comments
+        if: github.event.pull_request.state == 'open' && success()
+        env:
+          COMMENTS: ${{ runner.temp }}/implement_new_inline_comments.json
+        run: |
+          count=$(jq 'length' "$COMMENTS")
+          if [ "$count" -eq 0 ]; then
+            exit 0
+          fi
+          head_sha=$(git rev-parse HEAD)
+          for i in $(seq 0 $((count - 1))); do
+            path=$(jq -r ".[$i].path" "$COMMENTS")
+            line=$(jq -r ".[$i].line" "$COMMENTS")
+            body=$(jq -r ".[$i].body" "$COMMENTS")
+            gh api --method POST "repos/{owner}/{repo}/pulls/${PR_NUMBER}/comments" \
+              -f commit_id="$head_sha" \
+              -f path="$path" \
+              -F line="$line" \
+              -f side="RIGHT" \
+              -f body="$body"
+          done
+
+      - name: Post top-level comments
+        if: github.event.pull_request.state == 'open' && success()
+        env:
+          COMMENTS: ${{ runner.temp }}/implement_top_level_comments.json
+        run: |
+          count=$(jq 'length' "$COMMENTS")
+          if [ "$count" -eq 0 ]; then
+            exit 0
+          fi
+          for i in $(seq 0 $((count - 1))); do
+            body=$(jq -r ".[$i].body" "$COMMENTS")
+            gh pr comment "$PR_NUMBER" --body "$body"
+          done
+
+      - name: Mark blocked on failure
+        if: github.event.pull_request.state == 'open' && failure()
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          reason="(no reason file written; check workflow logs)"
+          if [ -f "${RUNNER_TEMP}/failure_reason.txt" ]; then
+            reason=$(cat "${RUNNER_TEMP}/failure_reason.txt")
+          fi
+          body_file="${RUNNER_TEMP}/failure-comment.md"
+          printf '`agent:implement` PR run failed.\n\n**Reason:** %s\n\n**Workflow run:** %s\n\nRe-add `agent:implement` to retry.\n' "$reason" "$RUN_URL" > "$body_file"
+          gh pr edit "$PR_NUMBER" --add-label "agent:blocked" || true
+          gh pr comment "$PR_NUMBER" --body-file "$body_file"
+
+      - name: Always remove in-progress
+        if: always() && github.event.pull_request.state == 'open'
+        run: gh pr edit "$PR_NUMBER" --remove-label "agent:in-progress" || true
