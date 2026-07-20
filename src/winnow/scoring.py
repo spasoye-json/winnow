@@ -44,6 +44,13 @@ Return only valid JSON in exactly this shape, with no prose outside it:
 "depth": 0, "production": 0}, "overall": 0.0, "hard_flags": [], "summary": "", \
 "rationale": ""}"""
 
+SAMPLE_TOKEN_TRIGGER = 15000
+SAMPLE_WORD_TRIGGER = 10000
+HEAD_TOKENS = 6000
+MIDDLE_TOKENS = 5000
+TAIL_TOKENS = 4000
+OMISSION_MARKER = "[... transcript omitted ...]"
+
 INSERT_SCORE = """
 INSERT INTO scores
     (video_id, overall, info_density, originality, clickbait_gap, padding,
@@ -82,7 +89,7 @@ def run_scoring(conn, fetch_transcript, llm, model, now=None):
     ).fetchall():
         transcript = fetch_transcript(yt_video_id)
         conn.execute(STORE_TRANSCRIPT, (transcript.language_code, video_id))
-        result = _score(llm, model, title, duration_sec, view_count, transcript.text)
+        result = _score(llm, model, title, duration_sec, view_count, transcript)
         _store_score(conn, video_id, result, model, now)
     conn.commit()
 
@@ -107,8 +114,101 @@ def _user_content(title, duration_sec, view_count, transcript):
         f"Title: {title}\n"
         f"Duration (seconds): {duration_sec}\n"
         f"View count (ignore as a quality signal): {view_count}\n\n"
-        f"Transcript:\n{transcript}"
+        f"{_transcript_body(transcript, duration_sec)}"
     )
+
+
+def _transcript_body(transcript, duration_sec):
+    if not transcript.snippets or not _should_sample(transcript.text):
+        return f"Transcript:\n{transcript.text}"
+    return _sampled_body(transcript, duration_sec)
+
+
+def _estimate_tokens(text):
+    return len(text) // 4
+
+
+def _should_sample(text):
+    return (
+        _estimate_tokens(text) > SAMPLE_TOKEN_TRIGGER
+        or len(text.split()) > SAMPLE_WORD_TRIGGER
+    )
+
+
+def _sampled_body(transcript, duration_sec):
+    snippets = transcript.snippets
+    stats = _stats_line(len(transcript.text.split()), duration_sec)
+    head = _join(snippets, _take(snippets, range(len(snippets)), HEAD_TOKENS))
+    tail = _join(
+        snippets,
+        sorted(_take(snippets, reversed(range(len(snippets))), TAIL_TOKENS)),
+    )
+    middle = _join(snippets, _middle(snippets, duration_sec))
+    return (
+        f"{stats}\n\n"
+        f"Transcript:\n"
+        f"{head}\n{OMISSION_MARKER}\n{middle}\n{OMISSION_MARKER}\n{tail}"
+    )
+
+
+def _stats_line(word_count, duration_sec):
+    wpm = word_count / (duration_sec / 60) if duration_sec else 0.0
+    return (
+        f"Transcript stats: {word_count} words, "
+        f"{duration_sec}s duration, {wpm:.1f} words per minute"
+    )
+
+
+def _take(snippets, indices, budget):
+    used = 0
+    taken = []
+    for i in indices:
+        cost = _estimate_tokens(snippets[i].text)
+        if taken and used + cost > budget:
+            break
+        taken.append(i)
+        used += cost
+    return taken
+
+
+def _middle(snippets, duration_sec):
+    center = _center_index(snippets, duration_sec)
+    used = _estimate_tokens(snippets[center].text)
+    lo = hi = center
+    while True:
+        prev_cost = _estimate_tokens(snippets[lo - 1].text) if lo > 0 else None
+        next_cost = (
+            _estimate_tokens(snippets[hi + 1].text)
+            if hi + 1 < len(snippets)
+            else None
+        )
+        prev_ok = prev_cost is not None and used + prev_cost <= MIDDLE_TOKENS
+        next_ok = next_cost is not None and used + next_cost <= MIDDLE_TOKENS
+        if not prev_ok and not next_ok:
+            break
+        if prev_ok and (not next_ok or (center - lo) <= (hi - center)):
+            lo -= 1
+            used += prev_cost
+        else:
+            hi += 1
+            used += next_cost
+    return range(lo, hi + 1)
+
+
+def _center_index(snippets, duration_sec):
+    target = duration_sec / 2
+    best = 0
+    best_dist = None
+    for i, snippet in enumerate(snippets):
+        dist = abs(snippet.start - target)
+        if best_dist is None or dist < best_dist:
+            best = i
+            best_dist = dist
+    return best
+
+
+def _join(snippets, indices):
+    return " ".join(snippets[i].text for i in indices)
 
 
 def _store_score(conn, video_id, result, model, now):
