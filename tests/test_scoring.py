@@ -389,6 +389,59 @@ def test_ip_block_trips_circuit_breaker_and_defers_batch(conn, exc):
     assert score_row(conn, "first") is None
 
 
+def test_ip_block_mid_batch_keeps_earlier_scores_and_defers_remainder(conn):
+    add_channel(conn, "UC1")
+    add_pending_video(conn, "UC1", "first")
+    add_pending_video(conn, "UC1", "second")
+    add_pending_video(conn, "UC1", "third")
+    calls = []
+
+    def fetch(yt_video_id):
+        calls.append(yt_video_id)
+        if yt_video_id == "first":
+            return Transcript(text="body", language_code="en")
+        raise IpBlocked(yt_video_id)
+
+    run_scoring(conn, fetch, FakeLLM(), model="m", now=NOW)
+
+    assert calls == ["first", "second"]
+    assert transcript_row(conn, "first") == ("ok", 0)
+    assert score_row(conn, "first") is not None
+    assert transcript_row(conn, "second") == ("pending", 0)
+    assert transcript_row(conn, "third") == ("pending", 0)
+
+
+def test_server_error_is_transient_and_defers(conn):
+    add_channel(conn, "UC1")
+    add_pending_video(conn, "UC1", "v1")
+    error = YouTubeRequestFailed(
+        "v1", HTTPError("503 Server Error: Service Unavailable")
+    )
+    fetch = raising_fetcher(error)
+    sleep = recording_sleep()
+
+    run_scoring(conn, fetch, FakeLLM(), model="m", now=NOW, sleep=sleep)
+
+    assert len(fetch.calls) == MAX_TRANSIENT_ATTEMPTS
+    assert transcript_row(conn, "v1") == ("pending", 0)
+    assert score_row(conn, "v1") is None
+
+
+def test_client_error_is_unknown_and_records_attempt(conn):
+    add_channel(conn, "UC1")
+    add_pending_video(conn, "UC1", "v1")
+    error = YouTubeRequestFailed("v1", HTTPError("404 Client Error: Not Found"))
+    fetch = raising_fetcher(error)
+    sleep = recording_sleep()
+
+    run_scoring(conn, fetch, FakeLLM(), model="m", now=NOW, sleep=sleep)
+
+    assert fetch.calls == ["v1"]
+    assert sleep.delays == []
+    assert transcript_row(conn, "v1") == ("pending", 1)
+    assert score_row(conn, "v1") is None
+
+
 def test_transient_failure_backs_off_then_defers(conn):
     add_channel(conn, "UC1")
     add_pending_video(conn, "UC1", "v1")
