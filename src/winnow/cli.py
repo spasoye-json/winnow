@@ -33,6 +33,11 @@ def main(argv=None):
     serve_parser.add_argument("--host", default="127.0.0.1")
     serve_parser.add_argument("--port", type=int, default=8000)
 
+    score_parser = subparsers.add_parser(
+        "score", help="fetch transcripts and score pending videos"
+    )
+    score_parser.add_argument("--db", default=DEFAULT_DB_PATH)
+
     args = parser.parse_args(argv)
 
     if args.command == "init":
@@ -63,3 +68,13 @@ def main(argv=None):
         logging.basicConfig(level=logging.INFO)
         app = create_app(args.db, args.client_secrets)
         uvicorn.run(app, host=args.host, port=args.port)
+    elif args.command == "score":
+        from winnow.scoring import build_client, model_name, run_scoring
+        from winnow.transcript import fetch_transcript
+
+        conn = connect(args.db)
+        try:
+            run_scoring(conn, fetch_transcript, build_client(), model_name())
+        finally:
+            conn.close()
+        print("scored pending videos")
