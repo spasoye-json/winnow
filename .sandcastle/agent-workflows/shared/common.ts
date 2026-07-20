@@ -3,6 +3,7 @@ import * as path from "node:path";
 import { execFileSync, execSync } from "node:child_process";
 import type { StandardSchemaV1 } from "@standard-schema/spec";
 import * as sandcastle from "@ai-hero/sandcastle";
+import { config } from "../../sandcastle.config";
 
 export const outputDir = (): string => process.env.OUTPUT_DIR ?? "/tmp";
 
@@ -82,8 +83,8 @@ export const writeText = (filename: string, value: string): void => {
   fs.writeFileSync(path.join(outputDir(), filename), value);
 };
 
-export const claudeAgent = () =>
-  sandcastle.claudeCode("claude-opus-4-8", {
+export const claudeAgent = (model: string = config.defaultModel) =>
+  sandcastle.claudeCode(model, {
     env: {
       CLAUDE_CODE_OAUTH_TOKEN: required("CLAUDE_CODE_OAUTH_TOKEN"),
     },

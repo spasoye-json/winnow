@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as sandcastle from "@ai-hero/sandcastle";
 import { noSandbox } from "@ai-hero/sandcastle/sandboxes/no-sandbox";
+import { config } from "../../sandcastle.config";
 import {
   claudeAgent,
   fail,
@@ -36,7 +37,7 @@ try {
 
   const result = await runWithExtraction({
     name: `review-pr-${PR_NUMBER}`,
-    agent: claudeAgent(),
+    agent: claudeAgent(config.reviewModel),
     sandbox: noSandbox(),
     logging: { type: "stdout" },
     promptFile: path.join(import.meta.dirname, "prompt.md"),

@@ -5,6 +5,10 @@ import { defaultImageName } from "@ai-hero/sandcastle/sandboxes/docker";
 import { config } from "./sandcastle.config";
 
 export const REPO = config.repo;
+export const DEFAULT_MODEL = config.defaultModel;
+export const VERIFY_MODEL = config.verifyModel;
+export const REVIEW_MODEL = config.reviewModel;
+export const FIX_MODEL = config.fixModel;
 export const QUEUE_LABEL = config.queueLabel;
 export const WORKING_LABEL = config.workingLabel;
 export const HUMAN_LABEL = config.humanLabel;

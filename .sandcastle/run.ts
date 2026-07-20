@@ -3,7 +3,9 @@ import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
 import {
   BASE,
   BRANCH_PREFIX,
+  DEFAULT_MODEL,
   GATE_SENTENCE,
+  REVIEW_MODEL,
   QUEUE_LABEL,
   TEST_DIR,
   diffHasSecret,
@@ -33,7 +35,7 @@ const issuesJson = gh([
 const plan = await sandcastle.run({
   sandbox: docker(),
   name: "Planner",
-  agent: sandcastle.claudeCode("claude-opus-4-8"),
+  agent: sandcastle.claudeCode(DEFAULT_MODEL),
   promptFile: "./.sandcastle/plan-prompt.md",
   promptArgs: { ISSUES_JSON: issuesJson, BRANCH_PREFIX },
 });
@@ -127,7 +129,7 @@ const settled = await Promise.allSettled(
       };
       const result = await sandbox.run({
         name: "Implementer #" + issue.number,
-        agent: sandcastle.claudeCode("claude-opus-4-8"),
+        agent: sandcastle.claudeCode(DEFAULT_MODEL),
         promptFile: "./.sandcastle/implement-prompt.md",
         promptArgs: { ...implementArgs, FEEDBACK: "" },
       });
@@ -150,7 +152,7 @@ const settled = await Promise.allSettled(
         );
         const fixRun = await sandbox.run({
           name: `Implementer #${issue.number} (gate retry ${retry})`,
-          agent: sandcastle.claudeCode("claude-opus-4-8"),
+          agent: sandcastle.claudeCode(DEFAULT_MODEL),
           promptFile: "./.sandcastle/implement-prompt.md",
           promptArgs: {
             ...implementArgs,
@@ -164,7 +166,7 @@ const settled = await Promise.allSettled(
       if (gate.ok) {
         await sandbox.run({
           name: "Reviewer #" + issue.number,
-          agent: sandcastle.claudeCode("claude-opus-4-8"),
+          agent: sandcastle.claudeCode(REVIEW_MODEL),
           promptFile: "./.sandcastle/review-prompt.md",
           promptArgs: {
             ISSUE_NUMBER: String(issue.number),

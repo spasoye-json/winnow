@@ -5,8 +5,12 @@ import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
 import {
   BASE,
   BRANCH_PREFIX,
+  DEFAULT_MODEL,
+  FIX_MODEL,
   GATE_SENTENCE,
   HUMAN_LABEL,
+  REVIEW_MODEL,
+  VERIFY_MODEL,
   QUEUE_LABEL,
   REPO,
   TEST_DIR,
@@ -138,7 +142,7 @@ for (const issue of issues.sort((a, b) => a.number - b.number)) {
       for (let attempt = 1; attempt <= MAX_BUILD_ATTEMPTS; attempt++) {
         runSeq += 1;
         await sandbox.run({
-          agent: claude("claude-opus-4-8"),
+          agent: claude(DEFAULT_MODEL),
           promptFile: "./.sandcastle/implement.md",
           promptArgs: { ISSUE: issueText, FEEDBACK: feedback },
           maxIterations: 6,
@@ -168,7 +172,7 @@ for (const issue of issues.sort((a, b) => a.number - b.number)) {
     if (build === "green") {
       for (let round = 1; round <= MAX_VERIFY_ROUNDS; round++) {
         const verify = await sandbox.run({
-          agent: claude("claude-opus-4-8"),
+          agent: claude(VERIFY_MODEL),
           promptFile: "./.sandcastle/verify.md",
           promptArgs: { ISSUE: issueText, BASE },
           name: `verify-${round}`,
@@ -239,7 +243,7 @@ for (const issue of issues.sort((a, b) => a.number - b.number)) {
     for (let cycle = 1; cycle <= MAX_REVIEW_CYCLES; cycle++) {
       cyclesUsed = cycle;
       const review = await sandbox.run({
-        agent: claude("claude-opus-4-8"),
+        agent: claude(REVIEW_MODEL),
         promptFile: "./.sandcastle/review.md",
         promptArgs: { BASE },
         name: `review-${cycle}`,
@@ -259,7 +263,7 @@ for (const issue of issues.sort((a, b) => a.number - b.number)) {
       }
 
       await sandbox.run({
-        agent: claude("claude-sonnet-5"), // mechanical fixes → cheaper tier
+        agent: claude(FIX_MODEL), // mechanical fixes → cheaper tier
         promptFile: "./.sandcastle/fix.md",
         promptArgs: { FINDINGS: lastVerdict.findings.map((f) => `- ${f}`).join("\n") },
         maxIterations: 4,

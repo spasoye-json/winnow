@@ -6,5 +6,11 @@ export const config = {
   queueLabel: "ready-for-agent",
   workingLabel: "claude-working",
   humanLabel: "ready-for-human",
+  // Model tiers: Fable 5 on the judgment gates (verify, review), Opus 4.8 on
+  // everything else, Sonnet 5 for mechanical fix application.
+  defaultModel: "claude-opus-4-8",
+  verifyModel: "claude-fable-5",
+  reviewModel: "claude-fable-5",
+  fixModel: "claude-sonnet-5",
   localBranchPrefix: "sandcastle/issue-",
 };
