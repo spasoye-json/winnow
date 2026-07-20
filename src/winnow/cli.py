@@ -23,6 +23,16 @@ def main(argv=None):
         "--client-secrets", default=auth.client_secrets_path()
     )
 
+    serve_parser = subparsers.add_parser(
+        "serve", help="run the web app and background due-check loop"
+    )
+    serve_parser.add_argument("--db", default=DEFAULT_DB_PATH)
+    serve_parser.add_argument(
+        "--client-secrets", default=auth.client_secrets_path()
+    )
+    serve_parser.add_argument("--host", default="127.0.0.1")
+    serve_parser.add_argument("--port", type=int, default=8000)
+
     args = parser.parse_args(argv)
 
     if args.command == "init":
@@ -43,3 +53,13 @@ def main(argv=None):
         finally:
             conn.close()
         print("connected google account")
+    elif args.command == "serve":
+        import logging
+
+        import uvicorn
+
+        from winnow.web import create_app
+
+        logging.basicConfig(level=logging.INFO)
+        app = create_app(args.db, args.client_secrets)
+        uvicorn.run(app, host=args.host, port=args.port)
