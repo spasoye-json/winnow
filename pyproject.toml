@@ -3,7 +3,9 @@ name = "winnow"
 version = "0.1.0"
 description = "Personal YouTube quality curator"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "google-auth-oauthlib>=1.4.0",
+]
 
 [project.scripts]
 winnow = "winnow.cli:main"
