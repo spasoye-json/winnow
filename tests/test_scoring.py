@@ -4,11 +4,14 @@ from types import SimpleNamespace
 import pytest
 from requests.exceptions import ConnectionError, HTTPError
 from youtube_transcript_api import (
+    AgeRestricted,
     IpBlocked,
+    NoTranscriptFound,
     PoTokenRequired,
     RequestBlocked,
     TranscriptsDisabled,
     VideoUnavailable,
+    VideoUnplayable,
     YouTubeRequestFailed,
 )
 
@@ -453,19 +456,26 @@ def test_successful_fetch_scores_at_full_confidence(conn):
     "exc",
     [
         TranscriptsDisabled("v1"),
+        NoTranscriptFound("v1", ["en"], None),
         VideoUnavailable("v1"),
+        VideoUnplayable("v1", "This video is unavailable", []),
+        AgeRestricted("v1"),
     ],
 )
 def test_permanent_failure_sets_no_transcript_and_scores_metadata_only(conn, exc):
     add_channel(conn, "UC1")
     add_pending_video(conn, "UC1", "v1")
     fetch = raising_fetcher(exc)
+    llm = FakeLLM()
 
-    run_scoring(conn, fetch, FakeLLM(), model="m", now=NOW)
+    run_scoring(conn, fetch, llm, model="m", now=NOW)
 
     assert transcript_row(conn, "v1") == ("no_transcript", 0)
     assert confidence(conn, "v1") == (METADATA_ONLY_CONFIDENCE,)
     assert fetch.calls == ["v1"]
+    content = user_content(llm)
+    assert "Title: A title" in content
+    assert "(unavailable; metadata only)" in content
 
 
 def test_permanent_failure_is_never_retried(conn):
