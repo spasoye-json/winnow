@@ -1,9 +1,12 @@
 import datetime
 import json
+from types import SimpleNamespace
 
 from google.oauth2.credentials import Credentials
 
 import winnow.auth as auth
+import winnow.scoring as scoring
+import winnow.transcript as transcript
 from winnow.auth import SCOPES
 from winnow.cli import main
 from winnow.db import connect
@@ -99,3 +102,63 @@ def test_connect_command_persists_credentials(tmp_path, monkeypatch):
     assert row[1] == "access-token"
     assert row[2] == " ".join(SCOPES)
     assert row[3] is not None
+
+
+SCORE_PAYLOAD = {
+    "scores": {
+        "info_density": 8,
+        "originality": 7,
+        "clickbait_gap": 9,
+        "padding": 3,
+        "depth": 6,
+        "production": 5,
+    },
+    "overall": 7.2,
+    "hard_flags": [],
+    "summary": "A summary.",
+    "rationale": "A rationale.",
+}
+
+
+def test_score_command_scores_pending_videos(tmp_path, monkeypatch):
+    db_path = tmp_path / "winnow.db"
+    main(["init", "--db", str(db_path)])
+
+    conn = connect(str(db_path))
+    conn.execute(
+        "INSERT INTO channels (yt_channel_id, name, source, added_at) "
+        "VALUES ('UC1', 'UC1', 'manual', '2026-01-01T00:00:00+00:00')"
+    )
+    conn.execute(
+        "INSERT INTO videos (yt_video_id, channel_id, title) "
+        "VALUES ('v1', 1, 'A title')"
+    )
+    conn.commit()
+    conn.close()
+
+    def create(*, model, messages, **kwargs):
+        message = SimpleNamespace(content=json.dumps(SCORE_PAYLOAD))
+        return SimpleNamespace(choices=[SimpleNamespace(message=message)])
+
+    fake_llm = SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=create))
+    )
+    monkeypatch.setattr(scoring, "build_client", lambda: fake_llm)
+    monkeypatch.setattr(scoring, "model_name", lambda: "test-model")
+    monkeypatch.setattr(
+        transcript,
+        "fetch_transcript",
+        lambda video_id: transcript.Transcript(text="body", language_code="en"),
+    )
+
+    main(["score", "--db", str(db_path)])
+
+    conn = connect(str(db_path))
+    try:
+        model, overall = conn.execute(
+            "SELECT model, overall FROM scores"
+        ).fetchone()
+    finally:
+        conn.close()
+    assert model == "test-model"
+    assert overall == 7.2
