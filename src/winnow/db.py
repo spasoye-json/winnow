@@ -42,6 +42,7 @@ CREATE TABLE IF NOT EXISTS videos (
     thumbnail_url TEXT,
     transcript_status TEXT NOT NULL DEFAULT 'pending'
         CHECK (transcript_status IN ('pending', 'ok', 'no_transcript', 'fetch_failed')),
+    transcript_attempts INTEGER NOT NULL DEFAULT 0,
     caption_language TEXT,
     ingested_at TEXT
 );
@@ -59,6 +60,7 @@ CREATE TABLE IF NOT EXISTS scores (
     hard_flags TEXT,
     summary TEXT,
     rationale TEXT,
+    confidence REAL,
     model TEXT,
     prompt_version INTEGER,
     scored_at TEXT
