@@ -8,10 +8,11 @@ def build_client(credentials):
 
 
 def iter_subscriptions(client):
-    request = client.subscriptions().list(
+    subscriptions = client.subscriptions()
+    request = subscriptions.list(
         part="snippet", mine=True, maxResults=SUBSCRIPTIONS_PAGE_SIZE
     )
     while request is not None:
         response = request.execute()
         yield from response.get("items", [])
-        request = client.subscriptions().list_next(request, response)
+        request = subscriptions.list_next(request, response)
