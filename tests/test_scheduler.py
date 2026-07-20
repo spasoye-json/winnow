@@ -1,10 +1,11 @@
+import asyncio
 from datetime import UTC, datetime, timedelta
 
 import pytest
 
 from winnow.db import connect, init_db
 from winnow.ingest import LAST_INGEST_KEY
-from winnow.scheduler import INGEST_INTERVAL, ingest_due, tick
+from winnow.scheduler import INGEST_INTERVAL, due_check_loop, ingest_due, tick
 
 NOW = datetime(2026, 7, 20, 12, 0, tzinfo=UTC)
 
@@ -87,3 +88,36 @@ def test_tick_skips_ingest_when_not_due(conn):
     seed_last_ingest(conn, recent)
     tick(conn, FakeYouTube(), now=NOW)
     assert last_ingest(conn) == recent
+
+
+def test_due_check_loop_ticks_then_stops_cleanly():
+    async def scenario():
+        stop = asyncio.Event()
+        ticks = 0
+
+        async def on_tick():
+            nonlocal ticks
+            ticks += 1
+            stop.set()
+
+        await due_check_loop(on_tick, stop, interval=timedelta(minutes=5))
+        return ticks
+
+    assert asyncio.run(scenario()) == 1
+
+
+def test_due_check_loop_repeats_until_stopped():
+    async def scenario():
+        stop = asyncio.Event()
+        ticks = 0
+
+        async def on_tick():
+            nonlocal ticks
+            ticks += 1
+            if ticks == 3:
+                stop.set()
+
+        await due_check_loop(on_tick, stop, interval=timedelta(seconds=0.001))
+        return ticks
+
+    assert asyncio.run(scenario()) == 3
