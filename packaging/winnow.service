@@ -1,0 +1,14 @@
+[Unit]
+Description=Winnow YouTube quality curator
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/.local/share/winnow
+ExecStart=%h/.local/bin/winnow serve
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
