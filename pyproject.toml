@@ -7,7 +7,9 @@ dependencies = [
     "fastapi>=0.139.2",
     "google-api-python-client>=2.0.0",
     "google-auth-oauthlib>=1.4.0",
+    "openai>=2.46.0",
     "uvicorn>=0.30",
+    "youtube-transcript-api>=1.2.4",
 ]
 
 [project.scripts]
