@@ -279,3 +279,78 @@ def test_last_successful_ingest_timestamp_is_recorded(conn):
         "SELECT value FROM settings WHERE key = ?", (LAST_INGEST_KEY,)
     ).fetchone()
     assert value == NOW
+
+
+def test_backfill_includes_video_exactly_at_cutoff(conn):
+    add_channel(conn, "UC1")
+    at_cutoff = "2026-06-20T00:00:00+00:00"
+    client = FakeYouTube(
+        playlists={uploads_id("UC1"): [upload("edge", at_cutoff)]},
+        videos={"edge": video_detail("edge")},
+    )
+
+    run_ingest(conn, client, now=NOW)
+
+    assert stored_video_ids(conn, "UC1") == ["edge"]
+
+
+def test_known_channel_takes_old_uploads_and_does_not_rebackfill(conn):
+    add_channel(conn, "UC1")
+    first = FakeYouTube(
+        playlists={uploads_id("UC1"): [upload("v1", RECENT)]},
+        videos={"v1": video_detail("v1")},
+    )
+    run_ingest(conn, first, now=NOW)
+
+    second = FakeYouTube(
+        playlists={uploads_id("UC1"): [upload("v2", OLD), upload("v1", RECENT)]},
+        videos={"v1": video_detail("v1"), "v2": video_detail("v2")},
+    )
+    run_ingest(conn, second, now=NOW)
+
+    assert stored_video_ids(conn, "UC1") == ["v1", "v2"]
+
+
+def test_duration_with_days_is_parsed(conn):
+    add_channel(conn, "UC1")
+    client = FakeYouTube(
+        playlists={uploads_id("UC1"): [upload("v1", RECENT)]},
+        videos={"v1": video_detail("v1", duration="P1DT2H3M4S")},
+    )
+
+    run_ingest(conn, client, now=NOW)
+
+    (duration,) = conn.execute(
+        "SELECT duration_sec FROM videos WHERE yt_video_id = 'v1'"
+    ).fetchone()
+    assert duration == 93784
+
+
+def test_thumbnail_prefers_highest_available_resolution(conn):
+    add_channel(conn, "UC1")
+    detail = {
+        "id": "v1",
+        "snippet": {
+            "title": "A title",
+            "description": "A description",
+            "publishedAt": RECENT,
+            "thumbnails": {
+                "medium": {"url": "https://i.ytimg.com/vi/v1/medium.jpg"},
+                "maxres": {"url": "https://i.ytimg.com/vi/v1/maxres.jpg"},
+                "high": {"url": "https://i.ytimg.com/vi/v1/high.jpg"},
+            },
+        },
+        "contentDetails": {"duration": "PT1M"},
+        "statistics": {"viewCount": "1"},
+    }
+    client = FakeYouTube(
+        playlists={uploads_id("UC1"): [upload("v1", RECENT)]},
+        videos={"v1": detail},
+    )
+
+    run_ingest(conn, client, now=NOW)
+
+    (url,) = conn.execute(
+        "SELECT thumbnail_url FROM videos WHERE yt_video_id = 'v1'"
+    ).fetchone()
+    assert url == "https://i.ytimg.com/vi/v1/maxres.jpg"
