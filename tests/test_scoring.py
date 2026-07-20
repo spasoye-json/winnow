@@ -49,6 +49,8 @@ PAYLOAD = {
     "rationale": "Because the analysis is dense and original.",
 }
 
+PAYLOAD_NO_FLAGS = {**PAYLOAD, "hard_flags": []}
+
 
 class FakeCompletions:
     def __init__(self, payload):
@@ -154,11 +156,12 @@ def conn():
     connection.close()
 
 
-def add_channel(conn, channel_id):
+def add_channel(conn, channel_id, *, exempt_low_transcript=0):
     conn.execute(
-        "INSERT INTO channels (yt_channel_id, name, source, added_at) "
-        "VALUES (?, ?, 'manual', '2026-01-01T00:00:00+00:00')",
-        (channel_id, channel_id),
+        "INSERT INTO channels "
+        "(yt_channel_id, name, source, exempt_low_transcript, added_at) "
+        "VALUES (?, ?, 'manual', ?, '2026-01-01T00:00:00+00:00')",
+        (channel_id, channel_id, exempt_low_transcript),
     )
     conn.commit()
 
@@ -188,6 +191,24 @@ def score_row(conn, yt_video_id):
     ).fetchone()
 
 
+def hard_flags(conn, yt_video_id):
+    (raw,) = conn.execute(
+        "SELECT s.hard_flags FROM scores s JOIN videos v ON v.id = s.video_id "
+        "WHERE v.yt_video_id = ?",
+        (yt_video_id,),
+    ).fetchone()
+    return json.loads(raw)
+
+
+def dimensions(conn, yt_video_id):
+    return conn.execute(
+        "SELECT s.info_density, s.originality, s.clickbait_gap, s.padding, "
+        "s.depth, s.production FROM scores s JOIN videos v ON v.id = s.video_id "
+        "WHERE v.yt_video_id = ?",
+        (yt_video_id,),
+    ).fetchone()
+
+
 def test_pending_video_scored_end_to_end(conn):
     add_channel(conn, "UC1")
     add_pending_video(conn, "UC1", "v1", duration_sec=600, view_count=42)
@@ -195,7 +216,7 @@ def test_pending_video_scored_end_to_end(conn):
 
     run_scoring(
         conn,
-        fetcher(Transcript(text="the transcript body", language_code="en")),
+        fetcher(Transcript(text=" ".join(["word"] * 400), language_code="en")),
         llm,
         model="gemini-3.1-flash-lite",
         now=NOW,
@@ -607,3 +628,139 @@ def test_unknown_failure_retries_across_two_runs_then_fetch_failed(conn):
 
     assert transcript_row(conn, "v1") == ("fetch_failed", 2)
     assert confidence(conn, "v1") == (METADATA_ONLY_CONFIDENCE,)
+
+
+def test_low_transcript_flag_fires_far_below_duration_ratio(conn):
+    add_channel(conn, "UC1")
+    add_pending_video(conn, "UC1", "v1", duration_sec=600)
+
+    run_scoring(
+        conn,
+        fetcher(Transcript(text="a very short body", language_code="en")),
+        FakeLLM(PAYLOAD_NO_FLAGS),
+        model="m",
+        now=NOW,
+    )
+
+    assert hard_flags(conn, "v1") == ["low_transcript"]
+
+
+def test_no_low_transcript_flag_when_transcript_meets_ratio(conn):
+    add_channel(conn, "UC1")
+    add_pending_video(conn, "UC1", "v1", duration_sec=600)
+
+    run_scoring(
+        conn,
+        fetcher(Transcript(text=" ".join(["word"] * 400), language_code="en")),
+        FakeLLM(PAYLOAD_NO_FLAGS),
+        model="m",
+        now=NOW,
+    )
+
+    assert hard_flags(conn, "v1") == []
+
+
+def test_ai_voice_flag_from_rubric_is_persisted(conn):
+    add_channel(conn, "UC1")
+    add_pending_video(conn, "UC1", "v1", duration_sec=600)
+
+    run_scoring(
+        conn,
+        fetcher(Transcript(text=" ".join(["word"] * 400), language_code="en")),
+        FakeLLM(PAYLOAD),
+        model="m",
+        now=NOW,
+    )
+
+    assert hard_flags(conn, "v1") == ["ai_voice"]
+
+
+def test_exempt_channel_skips_low_transcript_but_scores_all_dimensions(conn):
+    add_channel(conn, "UC1", exempt_low_transcript=1)
+    add_pending_video(conn, "UC1", "v1", duration_sec=600)
+
+    run_scoring(
+        conn,
+        fetcher(Transcript(text="a very short body", language_code="en")),
+        FakeLLM(PAYLOAD_NO_FLAGS),
+        model="m",
+        now=NOW,
+    )
+
+    assert hard_flags(conn, "v1") == []
+    assert dimensions(conn, "v1") == (8, 7, 9, 3, 6, 5)
+
+
+def test_exempt_channel_still_keeps_ai_voice_flag(conn):
+    add_channel(conn, "UC1", exempt_low_transcript=1)
+    add_pending_video(conn, "UC1", "v1", duration_sec=600)
+
+    run_scoring(
+        conn,
+        fetcher(Transcript(text="a very short body", language_code="en")),
+        FakeLLM(PAYLOAD),
+        model="m",
+        now=NOW,
+    )
+
+    assert hard_flags(conn, "v1") == ["ai_voice"]
+
+
+def test_transcript_exactly_at_ratio_is_not_flagged(conn):
+    add_channel(conn, "UC1")
+    add_pending_video(conn, "UC1", "v1", duration_sec=600)
+
+    run_scoring(
+        conn,
+        fetcher(Transcript(text=" ".join(["word"] * 300), language_code="en")),
+        FakeLLM(PAYLOAD_NO_FLAGS),
+        model="m",
+        now=NOW,
+    )
+
+    assert hard_flags(conn, "v1") == []
+
+
+def test_rubric_low_transcript_is_ignored_when_ratio_is_met(conn):
+    add_channel(conn, "UC1")
+    add_pending_video(conn, "UC1", "v1", duration_sec=600)
+
+    run_scoring(
+        conn,
+        fetcher(Transcript(text=" ".join(["word"] * 400), language_code="en")),
+        FakeLLM({**PAYLOAD, "hard_flags": ["low_transcript"]}),
+        model="m",
+        now=NOW,
+    )
+
+    assert hard_flags(conn, "v1") == []
+
+
+def test_ai_voice_and_low_transcript_flags_combine(conn):
+    add_channel(conn, "UC1")
+    add_pending_video(conn, "UC1", "v1", duration_sec=600)
+
+    run_scoring(
+        conn,
+        fetcher(Transcript(text="a very short body", language_code="en")),
+        FakeLLM(PAYLOAD),
+        model="m",
+        now=NOW,
+    )
+
+    assert hard_flags(conn, "v1") == ["ai_voice", "low_transcript"]
+
+
+def test_metadata_only_video_gets_no_low_transcript_flag(conn):
+    add_channel(conn, "UC1")
+    add_pending_video(conn, "UC1", "v1", duration_sec=600)
+
+    run_scoring(
+        conn,
+        raising_fetcher(TranscriptsDisabled("v1")),
+        FakeLLM(PAYLOAD_NO_FLAGS),
+        model="m",
+        now=NOW,
+    )
+
+    assert hard_flags(conn, "v1") == []

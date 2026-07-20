@@ -13,6 +13,11 @@ PROMPT_VERSION = 1
 FULL_CONFIDENCE = 1.0
 METADATA_ONLY_CONFIDENCE = 0.5
 
+AI_VOICE_FLAG = "ai_voice"
+LOW_TRANSCRIPT_FLAG = "low_transcript"
+LOW_TRANSCRIPT_RATIO = 0.2
+EXPECTED_WORDS_PER_MINUTE = 150
+
 MAX_TRANSIENT_ATTEMPTS = 3
 INITIAL_BACKOFF_SEC = 2
 MAX_BACKOFF_SEC = 60
@@ -86,8 +91,10 @@ MARK_FETCH_FAILED = (
 RECORD_ATTEMPT = "UPDATE videos SET transcript_attempts = ? WHERE id = ?"
 
 SELECT_PENDING = (
-    "SELECT id, yt_video_id, title, duration_sec, view_count, transcript_attempts "
-    "FROM videos WHERE transcript_status = 'pending'"
+    "SELECT v.id, v.yt_video_id, v.title, v.duration_sec, v.view_count, "
+    "v.transcript_attempts, COALESCE(c.exempt_low_transcript, 0) "
+    "FROM videos v LEFT JOIN channels c ON c.id = v.channel_id "
+    "WHERE v.transcript_status = 'pending'"
 )
 
 
@@ -107,13 +114,14 @@ def build_client():
 def run_scoring(conn, fetch_transcript, llm, model, now=None, sleep=time.sleep):
     now = now or datetime.now(UTC).isoformat()
     pending = conn.execute(SELECT_PENDING).fetchall()
-    for video_id, yt_video_id, title, duration_sec, view_count, attempts in pending:
+    for (video_id, yt_video_id, title, duration_sec, view_count, attempts,
+         exempt) in pending:
         transcript, failure = _fetch(fetch_transcript, yt_video_id, sleep)
         if failure is None:
             conn.execute(STORE_TRANSCRIPT, (transcript.language_code, video_id))
             _score_and_store(
                 conn, video_id, llm, model, title, duration_sec, view_count,
-                transcript, FULL_CONFIDENCE, now,
+                transcript, FULL_CONFIDENCE, now, exempt,
             )
         elif failure is FailureClass.IP_BLOCK:
             break
@@ -121,7 +129,7 @@ def run_scoring(conn, fetch_transcript, llm, model, now=None, sleep=time.sleep):
             conn.execute(MARK_NO_TRANSCRIPT, (video_id,))
             _score_and_store(
                 conn, video_id, llm, model, title, duration_sec, view_count,
-                None, METADATA_ONLY_CONFIDENCE, now,
+                None, METADATA_ONLY_CONFIDENCE, now, exempt,
             )
         elif failure is FailureClass.TRANSIENT:
             continue
@@ -131,7 +139,7 @@ def run_scoring(conn, fetch_transcript, llm, model, now=None, sleep=time.sleep):
                 conn.execute(MARK_FETCH_FAILED, (attempts, video_id))
                 _score_and_store(
                     conn, video_id, llm, model, title, duration_sec, view_count,
-                    None, METADATA_ONLY_CONFIDENCE, now,
+                    None, METADATA_ONLY_CONFIDENCE, now, exempt,
                 )
             else:
                 conn.execute(RECORD_ATTEMPT, (attempts, video_id))
@@ -155,10 +163,25 @@ def _fetch(fetch_transcript, yt_video_id, sleep):
 
 def _score_and_store(
     conn, video_id, llm, model, title, duration_sec, view_count,
-    transcript, confidence, now,
+    transcript, confidence, now, exempt,
 ):
     result = _score(llm, model, title, duration_sec, view_count, transcript)
-    _store_score(conn, video_id, result, model, confidence, now)
+    hard_flags = _hard_flags(result["hard_flags"], transcript, duration_sec, exempt)
+    _store_score(conn, video_id, result, hard_flags, model, confidence, now)
+
+
+def _hard_flags(rubric_flags, transcript, duration_sec, exempt):
+    flags = [AI_VOICE_FLAG] if AI_VOICE_FLAG in rubric_flags else []
+    if not exempt and _is_low_transcript(transcript, duration_sec):
+        flags.append(LOW_TRANSCRIPT_FLAG)
+    return flags
+
+
+def _is_low_transcript(transcript, duration_sec):
+    if transcript is None or not duration_sec:
+        return False
+    expected_words = duration_sec / 60 * EXPECTED_WORDS_PER_MINUTE
+    return len(transcript.text.split()) < LOW_TRANSCRIPT_RATIO * expected_words
 
 
 def _score(llm, model, title, duration_sec, view_count, transcript):
@@ -293,7 +316,7 @@ def _join(snippets, indices):
     return " ".join(snippets[i].text for i in indices)
 
 
-def _store_score(conn, video_id, result, model, confidence, now):
+def _store_score(conn, video_id, result, hard_flags, model, confidence, now):
     scores = result["scores"]
     conn.execute(
         INSERT_SCORE,
@@ -306,7 +329,7 @@ def _store_score(conn, video_id, result, model, confidence, now):
             scores["padding"],
             scores["depth"],
             scores["production"],
-            json.dumps(result["hard_flags"]),
+            json.dumps(hard_flags),
             result["summary"],
             result["rationale"],
             confidence,
