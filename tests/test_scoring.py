@@ -20,13 +20,14 @@ from winnow.scoring import (
     INITIAL_BACKOFF_SEC,
     MAX_TRANSIENT_ATTEMPTS,
     METADATA_ONLY_CONFIDENCE,
+    OMISSION_MARKER,
     PROMPT_VERSION,
     SYSTEM_PROMPT,
     build_client,
     model_name,
     run_scoring,
 )
-from winnow.transcript import Transcript, fetch_transcript
+from winnow.transcript import Snippet, Transcript, fetch_transcript
 
 NOW = "2026-07-20T00:00:00+00:00"
 
@@ -122,7 +123,10 @@ class FakeAvailable:
 class FakeFetched:
     def __init__(self, language_code, texts):
         self.language_code = language_code
-        self.snippets = [SimpleNamespace(text=text) for text in texts]
+        self.snippets = [
+            SimpleNamespace(text=text, start=float(i))
+            for i, text in enumerate(texts)
+        ]
 
 
 class FakeTranscriptApi:
@@ -297,6 +301,107 @@ def test_only_pending_videos_are_scored(conn):
 
     assert score_row(conn, "pending") is not None
     assert score_row(conn, "done") is None
+
+
+def long_transcript(count=1000):
+    snippets = tuple(
+        Snippet(start=float(i), text=f"seg{i:04d} " * 40) for i in range(count)
+    )
+    text = " ".join(snippet.text for snippet in snippets)
+    return Transcript(text=text, language_code="en", snippets=snippets)
+
+
+def user_content(llm):
+    return llm.completions.calls[0]["messages"][-1]["content"]
+
+
+def test_short_transcript_is_sent_whole_without_stats_or_markers(conn):
+    add_channel(conn, "UC1")
+    add_pending_video(conn, "UC1", "v1", duration_sec=600)
+    llm = FakeLLM()
+
+    run_scoring(
+        conn,
+        fetcher(Transcript(text="a short body", language_code="en")),
+        llm,
+        model="m",
+        now=NOW,
+    )
+
+    content = user_content(llm)
+    assert "a short body" in content
+    assert OMISSION_MARKER not in content
+    assert "words per minute" not in content
+
+
+def test_long_transcript_is_sampled_head_middle_tail(conn):
+    add_channel(conn, "UC1")
+    add_pending_video(conn, "UC1", "v1", duration_sec=1000)
+    llm = FakeLLM()
+
+    run_scoring(conn, fetcher(long_transcript()), llm, model="m", now=NOW)
+
+    content = user_content(llm)
+    assert content.count(OMISSION_MARKER) == 2
+    assert "seg0000" in content
+    assert "seg0500" in content
+    assert "seg0999" in content
+    assert "seg0200" not in content
+    assert "seg0800" not in content
+
+
+def test_word_triggered_transcript_within_token_budget_is_sent_once_whole(conn):
+    add_channel(conn, "UC1")
+    add_pending_video(conn, "UC1", "v1", duration_sec=1000)
+    llm = FakeLLM()
+    snippets = tuple(
+        Snippet(start=float(i), text=("pad " * 30).strip()) for i in range(335)
+    )
+    text = " ".join(snippet.text for snippet in snippets)
+    transcript = Transcript(text=text, language_code="en", snippets=snippets)
+
+    run_scoring(conn, fetcher(transcript), llm, model="m", now=NOW)
+
+    content = user_content(llm)
+    assert "10050 words" in content
+    assert OMISSION_MARKER not in content
+    assert content.count("pad") == 10050
+
+
+def test_overlapping_segments_merge_without_duplication(conn):
+    add_channel(conn, "UC1")
+    add_pending_video(conn, "UC1", "v1", duration_sec=188)
+    llm = FakeLLM()
+    snippets = tuple(
+        Snippet(start=float(i), text=(f"seg{i:04d} " * 40).strip())
+        for i in range(188)
+    )
+    text = " ".join(snippet.text for snippet in snippets)
+    transcript = Transcript(text=text, language_code="en", snippets=snippets)
+
+    run_scoring(conn, fetcher(transcript), llm, model="m", now=NOW)
+
+    content = user_content(llm)
+    assert content.count(OMISSION_MARKER) == 1
+    assert content.count("seg0070") == 40
+    assert "seg0000" in content
+    assert "seg0130" not in content
+    assert "seg0187" in content
+
+
+def test_long_transcript_stats_line_uses_full_word_count(conn):
+    add_channel(conn, "UC1")
+    add_pending_video(conn, "UC1", "v1", duration_sec=1000)
+    llm = FakeLLM()
+
+    run_scoring(conn, fetcher(long_transcript()), llm, model="m", now=NOW)
+
+    content = user_content(llm)
+    assert "40000 words" in content
+    assert "1000s duration" in content
+    assert "2400.0 words per minute" in content
+    stats_index = content.index("words per minute")
+    assert stats_index < content.index(OMISSION_MARKER)
 
 
 def test_fetch_transcript_spans_all_languages_and_returns_track_language():
