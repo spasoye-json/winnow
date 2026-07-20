@@ -1,9 +1,14 @@
 import json
+import logging
 import os
+import random
 import time
 from datetime import UTC, datetime
+from zoneinfo import ZoneInfo
 
 from winnow.transcript import FailureClass, classify_transcript_error
+
+logger = logging.getLogger("winnow.scoring")
 
 DEFAULT_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
 DEFAULT_MODEL = "gemini-3.1-flash-lite"
@@ -22,6 +27,25 @@ MAX_TRANSIENT_ATTEMPTS = 3
 INITIAL_BACKOFF_SEC = 2
 MAX_BACKOFF_SEC = 60
 MAX_UNKNOWN_ATTEMPTS = 2
+
+PACING_SEC = 10
+DAILY_CAP = 200
+PACIFIC = ZoneInfo("America/Los_Angeles")
+
+LLM_INITIAL_BACKOFF_SEC = 2
+LLM_BACKOFF_FACTOR = 2
+LLM_MAX_BACKOFF_SEC = 60
+LLM_MAX_ATTEMPTS = 5
+MAX_CONSECUTIVE_RATE_LIMITS = 3
+RETRYABLE_STATUS = (408, 429)
+
+SCORING_DAY_KEY = "scoring_day"
+SCORING_COUNT_KEY = "scoring_count"
+
+UPSERT_SETTING = (
+    "INSERT INTO settings (key, value) VALUES (?, ?) "
+    "ON CONFLICT(key) DO UPDATE SET value = excluded.value"
+)
 
 SYSTEM_PROMPT = """You are a strict quality curator for YouTube videos. You judge a \
 video only from its transcript and the metadata provided, scoring content quality \
@@ -94,7 +118,8 @@ SELECT_PENDING = (
     "SELECT v.id, v.yt_video_id, v.title, v.duration_sec, v.view_count, "
     "v.transcript_attempts, COALESCE(c.exempt_low_transcript, 0) "
     "FROM videos v LEFT JOIN channels c ON c.id = v.channel_id "
-    "WHERE v.transcript_status = 'pending'"
+    "WHERE v.transcript_status = 'pending' "
+    "ORDER BY v.published_at DESC, v.id ASC"
 )
 
 
@@ -111,39 +136,146 @@ def build_client():
     )
 
 
-def run_scoring(conn, fetch_transcript, llm, model, now=None, sleep=time.sleep):
+class _ScoringDeferred(Exception):
+    def __init__(self, rate_limited):
+        self.rate_limited = rate_limited
+
+
+def pacific_day(now_iso):
+    return datetime.fromisoformat(now_iso).astimezone(PACIFIC).date().isoformat()
+
+
+def day_count(conn, now_iso):
+    return _load_day_count(conn, pacific_day(now_iso))
+
+
+def run_scoring(conn, fetch_transcript, llm, model, now=None, sleep=time.sleep,
+                rand=random.random):
     now = now or datetime.now(UTC).isoformat()
+    day = pacific_day(now)
+    count = _load_day_count(conn, day)
     pending = conn.execute(SELECT_PENDING).fetchall()
+    consecutive_rate_limits = 0
+    made_call = False
     for (video_id, yt_video_id, title, duration_sec, view_count, attempts,
          exempt) in pending:
-        transcript, failure = _fetch(fetch_transcript, yt_video_id, sleep)
-        if failure is None:
-            conn.execute(STORE_TRANSCRIPT, (transcript.language_code, video_id))
-            _score_and_store(
-                conn, video_id, llm, model, title, duration_sec, view_count,
-                transcript, FULL_CONFIDENCE, now, exempt,
-            )
-        elif failure is FailureClass.IP_BLOCK:
+        if count >= DAILY_CAP:
             break
-        elif failure is FailureClass.PERMANENT:
-            conn.execute(MARK_NO_TRANSCRIPT, (video_id,))
-            _score_and_store(
-                conn, video_id, llm, model, title, duration_sec, view_count,
-                None, METADATA_ONLY_CONFIDENCE, now, exempt,
-            )
-        elif failure is FailureClass.TRANSIENT:
+        transcript, failure = _fetch(fetch_transcript, yt_video_id, sleep)
+        if failure is FailureClass.IP_BLOCK:
+            break
+        plan = _transcript_plan(conn, failure, transcript, video_id, attempts)
+        if plan is None:
             continue
-        else:
-            attempts += 1
-            if attempts >= MAX_UNKNOWN_ATTEMPTS:
-                conn.execute(MARK_FETCH_FAILED, (attempts, video_id))
-                _score_and_store(
-                    conn, video_id, llm, model, title, duration_sec, view_count,
-                    None, METADATA_ONLY_CONFIDENCE, now, exempt,
-                )
-            else:
-                conn.execute(RECORD_ATTEMPT, (attempts, video_id))
+        status_sql, params, confidence, score_transcript = plan
+        if made_call:
+            sleep(PACING_SEC)
+        made_call = True
+        try:
+            result = _score_with_backoff(
+                llm, model, title, duration_sec, view_count, score_transcript,
+                sleep, rand,
+            )
+        except _ScoringDeferred as deferred:
+            if deferred.rate_limited:
+                consecutive_rate_limits += 1
+                if consecutive_rate_limits >= MAX_CONSECUTIVE_RATE_LIMITS:
+                    break
+            continue
+        consecutive_rate_limits = 0
+        conn.execute(status_sql, params)
+        hard_flags = _hard_flags(
+            result["hard_flags"], score_transcript, duration_sec, exempt
+        )
+        _store_score(conn, video_id, result, hard_flags, model, confidence, now)
+        count += 1
+        _persist_day_count(conn, day, count)
+        logger.info("scored on Pacific day %s, day count %d/%d", day, count, DAILY_CAP)
     conn.commit()
+
+
+def _transcript_plan(conn, failure, transcript, video_id, attempts):
+    if failure is None:
+        return (
+            STORE_TRANSCRIPT, (transcript.language_code, video_id),
+            FULL_CONFIDENCE, transcript,
+        )
+    if failure is FailureClass.PERMANENT:
+        return MARK_NO_TRANSCRIPT, (video_id,), METADATA_ONLY_CONFIDENCE, None
+    if failure is FailureClass.TRANSIENT:
+        return None
+    attempts += 1
+    if attempts >= MAX_UNKNOWN_ATTEMPTS:
+        return (
+            MARK_FETCH_FAILED, (attempts, video_id),
+            METADATA_ONLY_CONFIDENCE, None,
+        )
+    conn.execute(RECORD_ATTEMPT, (attempts, video_id))
+    return None
+
+
+def _load_day_count(conn, day):
+    stored_day = _setting(conn, SCORING_DAY_KEY)
+    if stored_day != day:
+        return 0
+    stored_count = _setting(conn, SCORING_COUNT_KEY)
+    return int(stored_count) if stored_count is not None else 0
+
+
+def _persist_day_count(conn, day, count):
+    conn.execute(UPSERT_SETTING, (SCORING_DAY_KEY, day))
+    conn.execute(UPSERT_SETTING, (SCORING_COUNT_KEY, str(count)))
+
+
+def _setting(conn, key):
+    row = conn.execute(
+        "SELECT value FROM settings WHERE key = ?", (key,)
+    ).fetchone()
+    return row[0] if row else None
+
+
+def _score_with_backoff(llm, model, title, duration_sec, view_count, transcript,
+                        sleep, rand):
+    delay = LLM_INITIAL_BACKOFF_SEC
+    rate_limited = False
+    for attempt in range(LLM_MAX_ATTEMPTS):
+        try:
+            return _score(llm, model, title, duration_sec, view_count, transcript)
+        except Exception as exc:
+            status = getattr(exc, "status_code", None)
+            if not _llm_retryable(status):
+                raise
+            rate_limited = status == 429
+            if attempt < LLM_MAX_ATTEMPTS - 1:
+                sleep(_backoff_delay(exc, delay, rand))
+                delay = min(delay * LLM_BACKOFF_FACTOR, LLM_MAX_BACKOFF_SEC)
+    raise _ScoringDeferred(rate_limited=rate_limited)
+
+
+def _llm_retryable(status):
+    if status is None:
+        return False
+    return status in RETRYABLE_STATUS or 500 <= status <= 599
+
+
+def _backoff_delay(exc, delay, rand):
+    retry_after = _retry_after(exc)
+    if retry_after is not None:
+        return retry_after
+    return rand() * delay
+
+
+def _retry_after(exc):
+    response = getattr(exc, "response", None)
+    if response is None:
+        return None
+    value = response.headers.get("retry-after")
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except ValueError:
+        return None
 
 
 def _fetch(fetch_transcript, yt_video_id, sleep):
@@ -159,15 +291,6 @@ def _fetch(fetch_transcript, yt_video_id, sleep):
                 sleep(delay)
                 delay = min(delay * 2, MAX_BACKOFF_SEC)
     return None, FailureClass.TRANSIENT
-
-
-def _score_and_store(
-    conn, video_id, llm, model, title, duration_sec, view_count,
-    transcript, confidence, now, exempt,
-):
-    result = _score(llm, model, title, duration_sec, view_count, transcript)
-    hard_flags = _hard_flags(result["hard_flags"], transcript, duration_sec, exempt)
-    _store_score(conn, video_id, result, hard_flags, model, confidence, now)
 
 
 def _hard_flags(rubric_flags, transcript, duration_sec, exempt):

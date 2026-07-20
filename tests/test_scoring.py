@@ -1,7 +1,15 @@
 import json
+import logging
 from types import SimpleNamespace
 
+import httpx
 import pytest
+from openai import (
+    BadRequestError,
+    InternalServerError,
+    PermissionDeniedError,
+    RateLimitError,
+)
 from requests.exceptions import ConnectionError, HTTPError
 from youtube_transcript_api import (
     AgeRestricted,
@@ -17,16 +25,24 @@ from youtube_transcript_api import (
 
 from winnow.db import connect, init_db
 from winnow.scoring import (
+    DAILY_CAP,
     DEFAULT_BASE_URL,
     DEFAULT_MODEL,
     FULL_CONFIDENCE,
     INITIAL_BACKOFF_SEC,
+    LLM_INITIAL_BACKOFF_SEC,
+    LLM_MAX_ATTEMPTS,
+    MAX_CONSECUTIVE_RATE_LIMITS,
     MAX_TRANSIENT_ATTEMPTS,
     METADATA_ONLY_CONFIDENCE,
     OMISSION_MARKER,
+    PACING_SEC,
     PROMPT_VERSION,
+    SCORING_COUNT_KEY,
+    SCORING_DAY_KEY,
     SYSTEM_PROMPT,
     build_client,
+    day_count,
     model_name,
     run_scoring,
 )
@@ -68,6 +84,44 @@ class FakeLLM:
     def __init__(self, payload=PAYLOAD):
         self.completions = FakeCompletions(payload)
         self.chat = SimpleNamespace(completions=self.completions)
+
+
+def api_error(cls, status, *, retry_after=None):
+    headers = {"retry-after": str(retry_after)} if retry_after is not None else {}
+    response = httpx.Response(
+        status, headers=headers, request=httpx.Request("POST", "http://test")
+    )
+    return cls("boom", response=response, body=None)
+
+
+class FlakyCompletions:
+    def __init__(self, errors, payload=PAYLOAD):
+        self.errors = list(errors)
+        self.payload = payload
+        self.calls = []
+
+    def create(self, *, model, messages, **kwargs):
+        self.calls.append({"model": model, "messages": messages, "kwargs": kwargs})
+        if self.errors:
+            error = self.errors.pop(0)
+            if error is not None:
+                raise error
+        content = json.dumps(self.payload)
+        message = SimpleNamespace(content=content)
+        return SimpleNamespace(choices=[SimpleNamespace(message=message)])
+
+
+class FlakyLLM:
+    def __init__(self, errors, payload=PAYLOAD):
+        self.completions = FlakyCompletions(errors, payload)
+        self.chat = SimpleNamespace(completions=self.completions)
+
+
+def constant_rand(value):
+    def rand():
+        return value
+
+    return rand
 
 
 def fetcher(transcript):
@@ -167,15 +221,15 @@ def add_channel(conn, channel_id, *, exempt_low_transcript=0):
 
 
 def add_pending_video(conn, channel_id, yt_video_id, *, title="A title",
-                      duration_sec=600, view_count=100):
+                      duration_sec=600, view_count=100, published_at=None):
     (internal_id,) = conn.execute(
         "SELECT id FROM channels WHERE yt_channel_id = ?", (channel_id,)
     ).fetchone()
     conn.execute(
         "INSERT INTO videos "
-        "(yt_video_id, channel_id, title, duration_sec, view_count) "
-        "VALUES (?, ?, ?, ?, ?)",
-        (yt_video_id, internal_id, title, duration_sec, view_count),
+        "(yt_video_id, channel_id, title, duration_sec, view_count, published_at) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (yt_video_id, internal_id, title, duration_sec, view_count, published_at),
     )
     conn.commit()
 
@@ -272,6 +326,7 @@ def test_system_prompt_is_first_and_identical_across_calls(conn):
         llm,
         model="m",
         now=NOW,
+        sleep=recording_sleep(),
     )
 
     calls = llm.completions.calls
@@ -764,3 +819,283 @@ def test_metadata_only_video_gets_no_low_transcript_flag(conn):
     )
 
     assert hard_flags(conn, "v1") == []
+
+
+def set_day_count(conn, day, count):
+    conn.execute(
+        "INSERT INTO settings (key, value) VALUES (?, ?)", (SCORING_DAY_KEY, day)
+    )
+    conn.execute(
+        "INSERT INTO settings (key, value) VALUES (?, ?)",
+        (SCORING_COUNT_KEY, str(count)),
+    )
+    conn.commit()
+
+
+def scored_ids(llm):
+    return [
+        call["messages"][-1]["content"].split("\n", 1)[0]
+        for call in llm.completions.calls
+    ]
+
+
+def test_llm_rate_limit_retries_with_full_jitter_then_scores(conn):
+    add_channel(conn, "UC1")
+    add_pending_video(conn, "UC1", "v1")
+    llm = FlakyLLM([api_error(RateLimitError, 429), api_error(RateLimitError, 429)])
+    sleep = recording_sleep()
+
+    run_scoring(
+        conn,
+        fetcher(Transcript(text="body", language_code="en")),
+        llm,
+        model="m",
+        now=NOW,
+        sleep=sleep,
+        rand=constant_rand(1.0),
+    )
+
+    assert len(llm.completions.calls) == 3
+    assert sleep.delays == [
+        LLM_INITIAL_BACKOFF_SEC,
+        LLM_INITIAL_BACKOFF_SEC * 2,
+    ]
+    assert score_row(conn, "v1") is not None
+
+
+def test_llm_backoff_honors_retry_after_header(conn):
+    add_channel(conn, "UC1")
+    add_pending_video(conn, "UC1", "v1")
+    llm = FlakyLLM([api_error(RateLimitError, 429, retry_after=7)])
+    sleep = recording_sleep()
+
+    run_scoring(
+        conn,
+        fetcher(Transcript(text="body", language_code="en")),
+        llm,
+        model="m",
+        now=NOW,
+        sleep=sleep,
+        rand=constant_rand(1.0),
+    )
+
+    assert sleep.delays == [7.0]
+    assert score_row(conn, "v1") is not None
+
+
+def test_server_error_is_retried_and_scores(conn):
+    add_channel(conn, "UC1")
+    add_pending_video(conn, "UC1", "v1")
+    llm = FlakyLLM([api_error(InternalServerError, 503)])
+    sleep = recording_sleep()
+
+    run_scoring(
+        conn,
+        fetcher(Transcript(text="body", language_code="en")),
+        llm,
+        model="m",
+        now=NOW,
+        sleep=sleep,
+        rand=constant_rand(0.5),
+    )
+
+    assert len(llm.completions.calls) == 2
+    assert score_row(conn, "v1") is not None
+
+
+def test_llm_bad_request_is_never_retried(conn):
+    add_channel(conn, "UC1")
+    add_pending_video(conn, "UC1", "v1")
+    llm = FlakyLLM([api_error(BadRequestError, 400)])
+
+    with pytest.raises(BadRequestError):
+        run_scoring(
+            conn,
+            fetcher(Transcript(text="body", language_code="en")),
+            llm,
+            model="m",
+            now=NOW,
+        )
+
+    assert len(llm.completions.calls) == 1
+
+
+def test_llm_permission_denied_is_never_retried(conn):
+    add_channel(conn, "UC1")
+    add_pending_video(conn, "UC1", "v1")
+    llm = FlakyLLM([api_error(PermissionDeniedError, 403)])
+
+    with pytest.raises(PermissionDeniedError):
+        run_scoring(
+            conn,
+            fetcher(Transcript(text="body", language_code="en")),
+            llm,
+            model="m",
+            now=NOW,
+        )
+
+    assert len(llm.completions.calls) == 1
+
+
+def test_three_exhausted_rate_limits_stop_batch_and_defer_remainder(conn):
+    add_channel(conn, "UC1")
+    for index in range(5):
+        add_pending_video(conn, "UC1", f"v{index}")
+    llm = FlakyLLM([api_error(RateLimitError, 429)] * 100)
+    sleep = recording_sleep()
+
+    run_scoring(
+        conn,
+        fetcher(Transcript(text="body", language_code="en")),
+        llm,
+        model="m",
+        now=NOW,
+        sleep=sleep,
+        rand=constant_rand(0.0),
+    )
+
+    assert len(llm.completions.calls) == LLM_MAX_ATTEMPTS * MAX_CONSECUTIVE_RATE_LIMITS
+    for index in range(5):
+        assert transcript_row(conn, f"v{index}") == ("pending", 0)
+        assert score_row(conn, f"v{index}") is None
+
+
+def test_rate_limit_streak_resets_after_a_success(conn):
+    add_channel(conn, "UC1")
+    add_pending_video(conn, "UC1", "v1", published_at="2026-07-05T00:00:00+00:00")
+    add_pending_video(conn, "UC1", "v2", published_at="2026-07-04T00:00:00+00:00")
+    add_pending_video(conn, "UC1", "v3", published_at="2026-07-03T00:00:00+00:00")
+    exhaust = [api_error(RateLimitError, 429)] * LLM_MAX_ATTEMPTS
+    llm = FlakyLLM([*exhaust, None, *exhaust])
+    sleep = recording_sleep()
+
+    run_scoring(
+        conn,
+        fetcher(Transcript(text="body", language_code="en")),
+        llm,
+        model="m",
+        now=NOW,
+        sleep=sleep,
+        rand=constant_rand(0.0),
+    )
+
+    assert score_row(conn, "v1") is None
+    assert score_row(conn, "v2") is not None
+    assert score_row(conn, "v3") is None
+    assert transcript_row(conn, "v3") == ("pending", 0)
+
+
+def test_pacing_sleeps_ten_seconds_between_llm_calls(conn):
+    add_channel(conn, "UC1")
+    add_pending_video(conn, "UC1", "v1", published_at="2026-07-05T00:00:00+00:00")
+    add_pending_video(conn, "UC1", "v2", published_at="2026-07-04T00:00:00+00:00")
+    sleep = recording_sleep()
+
+    run_scoring(
+        conn,
+        fetcher(Transcript(text="body", language_code="en")),
+        FakeLLM(),
+        model="m",
+        now=NOW,
+        sleep=sleep,
+    )
+
+    assert sleep.delays == [PACING_SEC]
+
+
+def test_backlog_drains_newest_first_by_publish_date(conn):
+    add_channel(conn, "UC1")
+    add_pending_video(
+        conn, "UC1", "old", title="oldest",
+        published_at="2026-07-01T00:00:00+00:00",
+    )
+    add_pending_video(
+        conn, "UC1", "new", title="newest",
+        published_at="2026-07-19T00:00:00+00:00",
+    )
+    add_pending_video(
+        conn, "UC1", "mid", title="middle",
+        published_at="2026-07-10T00:00:00+00:00",
+    )
+    llm = FakeLLM()
+
+    run_scoring(
+        conn,
+        fetcher(Transcript(text="body", language_code="en")),
+        llm,
+        model="m",
+        now=NOW,
+        sleep=recording_sleep(),
+    )
+
+    assert scored_ids(llm) == ["Title: newest", "Title: middle", "Title: oldest"]
+
+
+def test_daily_cap_stops_scoring_when_reached(conn):
+    add_channel(conn, "UC1")
+    add_pending_video(conn, "UC1", "v1", published_at="2026-07-05T00:00:00+00:00")
+    add_pending_video(conn, "UC1", "v2", published_at="2026-07-04T00:00:00+00:00")
+    set_day_count(conn, "2026-07-19", DAILY_CAP - 1)
+    llm = FakeLLM()
+
+    run_scoring(
+        conn,
+        fetcher(Transcript(text="body", language_code="en")),
+        llm,
+        model="m",
+        now="2026-07-20T06:00:00+00:00",
+        sleep=recording_sleep(),
+    )
+
+    assert len(llm.completions.calls) == 1
+    assert score_row(conn, "v1") is not None
+    assert score_row(conn, "v2") is None
+    assert transcript_row(conn, "v2") == ("pending", 0)
+
+
+def test_daily_count_persisted_and_logged(conn, caplog):
+    add_channel(conn, "UC1")
+    add_pending_video(conn, "UC1", "v1")
+    llm = FakeLLM()
+
+    with caplog.at_level(logging.INFO, logger="winnow.scoring"):
+        run_scoring(
+            conn,
+            fetcher(Transcript(text="body", language_code="en")),
+            llm,
+            model="m",
+            now="2026-07-20T06:00:00+00:00",
+        )
+
+    assert day_count(conn, "2026-07-20T06:00:00+00:00") == 1
+    assert any("day count 1" in record.message for record in caplog.records)
+
+
+def test_cap_resets_across_pacific_midnight_with_injected_clock(conn):
+    add_channel(conn, "UC1")
+    add_pending_video(conn, "UC1", "before")
+    set_day_count(conn, "2026-07-19", DAILY_CAP)
+    before_midnight = "2026-07-20T06:59:00+00:00"
+    after_midnight = "2026-07-20T07:01:00+00:00"
+
+    run_scoring(
+        conn,
+        fetcher(Transcript(text="body", language_code="en")),
+        FakeLLM(),
+        model="m",
+        now=before_midnight,
+    )
+
+    assert score_row(conn, "before") is None
+    assert day_count(conn, before_midnight) == DAILY_CAP
+
+    run_scoring(
+        conn,
+        fetcher(Transcript(text="body", language_code="en")),
+        FakeLLM(),
+        model="m",
+        now=after_midnight,
+    )
+
+    assert score_row(conn, "before") is not None
+    assert day_count(conn, after_midnight) == 1
