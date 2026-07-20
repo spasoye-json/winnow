@@ -157,6 +157,19 @@ def run_scoring(conn, fetch_transcript, llm, model, now=None, sleep=time.sleep,
     pending = conn.execute(SELECT_PENDING).fetchall()
     consecutive_rate_limits = 0
     made_call = False
+
+    def record_request():
+        nonlocal count
+        if count >= DAILY_CAP:
+            return False
+        count += 1
+        _persist_day_count(conn, day, count)
+        conn.commit()
+        logger.info(
+            "llm request on Pacific day %s, day count %d/%d", day, count, DAILY_CAP
+        )
+        return True
+
     for (video_id, yt_video_id, title, duration_sec, view_count, attempts,
          exempt) in pending:
         if count >= DAILY_CAP:
@@ -174,7 +187,7 @@ def run_scoring(conn, fetch_transcript, llm, model, now=None, sleep=time.sleep,
         try:
             result = _score_with_backoff(
                 llm, model, title, duration_sec, view_count, score_transcript,
-                sleep, rand,
+                sleep, rand, record_request,
             )
         except _ScoringDeferred as deferred:
             if deferred.rate_limited:
@@ -188,9 +201,7 @@ def run_scoring(conn, fetch_transcript, llm, model, now=None, sleep=time.sleep,
             result["hard_flags"], score_transcript, duration_sec, exempt
         )
         _store_score(conn, video_id, result, hard_flags, model, confidence, now)
-        count += 1
-        _persist_day_count(conn, day, count)
-        logger.info("scored on Pacific day %s, day count %d/%d", day, count, DAILY_CAP)
+        conn.commit()
     conn.commit()
 
 
@@ -235,10 +246,12 @@ def _setting(conn, key):
 
 
 def _score_with_backoff(llm, model, title, duration_sec, view_count, transcript,
-                        sleep, rand):
+                        sleep, rand, record_request):
     delay = LLM_INITIAL_BACKOFF_SEC
     rate_limited = False
     for attempt in range(LLM_MAX_ATTEMPTS):
+        if not record_request():
+            break
         try:
             return _score(llm, model, title, duration_sec, view_count, transcript)
         except Exception as exc:

@@ -44,6 +44,7 @@ from winnow.scoring import (
     build_client,
     day_count,
     model_name,
+    pacific_day,
     run_scoring,
 )
 from winnow.transcript import Snippet, Transcript, fetch_transcript
@@ -1099,3 +1100,83 @@ def test_cap_resets_across_pacific_midnight_with_injected_clock(conn):
 
     assert score_row(conn, "before") is not None
     assert day_count(conn, after_midnight) == 1
+
+
+def test_retry_attempts_count_toward_daily_cap(conn):
+    add_channel(conn, "UC1")
+    add_pending_video(conn, "UC1", "v1")
+    set_day_count(conn, pacific_day(NOW), DAILY_CAP - 2)
+    llm = FlakyLLM([api_error(RateLimitError, 429)] * LLM_MAX_ATTEMPTS)
+
+    run_scoring(
+        conn,
+        fetcher(Transcript(text="body", language_code="en")),
+        llm,
+        model="m",
+        now=NOW,
+        sleep=recording_sleep(),
+        rand=constant_rand(0.0),
+    )
+
+    assert len(llm.completions.calls) == 2
+    assert day_count(conn, NOW) == DAILY_CAP
+    assert score_row(conn, "v1") is None
+    assert transcript_row(conn, "v1") == ("pending", 0)
+
+
+def test_exhausted_retries_count_toward_daily_cap(conn):
+    add_channel(conn, "UC1")
+    add_pending_video(conn, "UC1", "v1")
+    llm = FlakyLLM([api_error(InternalServerError, 503)] * LLM_MAX_ATTEMPTS)
+
+    run_scoring(
+        conn,
+        fetcher(Transcript(text="body", language_code="en")),
+        llm,
+        model="m",
+        now=NOW,
+        sleep=recording_sleep(),
+        rand=constant_rand(0.0),
+    )
+
+    assert day_count(conn, NOW) == LLM_MAX_ATTEMPTS
+    assert score_row(conn, "v1") is None
+
+
+def test_day_count_survives_non_retryable_error(conn):
+    add_channel(conn, "UC1")
+    add_pending_video(conn, "UC1", "v1")
+    llm = FlakyLLM([api_error(BadRequestError, 400)])
+
+    with pytest.raises(BadRequestError):
+        run_scoring(
+            conn,
+            fetcher(Transcript(text="body", language_code="en")),
+            llm,
+            model="m",
+            now=NOW,
+        )
+
+    conn.rollback()
+    assert day_count(conn, NOW) == 1
+
+
+def test_scores_commit_before_later_non_retryable_error(conn):
+    add_channel(conn, "UC1")
+    add_pending_video(conn, "UC1", "v1", published_at="2026-07-05T00:00:00+00:00")
+    add_pending_video(conn, "UC1", "v2", published_at="2026-07-04T00:00:00+00:00")
+    llm = FlakyLLM([None, api_error(BadRequestError, 400)])
+
+    with pytest.raises(BadRequestError):
+        run_scoring(
+            conn,
+            fetcher(Transcript(text="body", language_code="en")),
+            llm,
+            model="m",
+            now=NOW,
+            sleep=recording_sleep(),
+        )
+
+    conn.rollback()
+    assert score_row(conn, "v1") is not None
+    assert day_count(conn, NOW) == 2
