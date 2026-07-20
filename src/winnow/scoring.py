@@ -138,17 +138,30 @@ def _should_sample(text):
 def _sampled_body(transcript, duration_sec):
     snippets = transcript.snippets
     stats = _stats_line(len(transcript.text.split()), duration_sec)
-    head = _join(snippets, _take(snippets, range(len(snippets)), HEAD_TOKENS))
-    tail = _join(
-        snippets,
-        sorted(_take(snippets, reversed(range(len(snippets))), TAIL_TOKENS)),
+    body = f"\n{OMISSION_MARKER}\n".join(
+        _join(snippets, segment)
+        for segment in _segments(snippets, duration_sec)
     )
-    middle = _join(snippets, _middle(snippets, duration_sec))
-    return (
-        f"{stats}\n\n"
-        f"Transcript:\n"
-        f"{head}\n{OMISSION_MARKER}\n{middle}\n{OMISSION_MARKER}\n{tail}"
-    )
+    return f"{stats}\n\nTranscript:\n{body}"
+
+
+def _segments(snippets, duration_sec):
+    count = len(snippets)
+    head = range(0, _fit(snippets, range(count), HEAD_TOKENS))
+    tail = range(count - _fit(snippets, reversed(range(count)), TAIL_TOKENS), count)
+    return _merge([head, _middle(snippets, duration_sec), tail])
+
+
+def _merge(ranges):
+    ordered = sorted(ranges, key=lambda r: r.start)
+    merged = [ordered[0]]
+    for r in ordered[1:]:
+        last = merged[-1]
+        if r.start <= last.stop:
+            merged[-1] = range(last.start, max(last.stop, r.stop))
+        else:
+            merged.append(r)
+    return merged
 
 
 def _stats_line(word_count, duration_sec):
@@ -159,16 +172,16 @@ def _stats_line(word_count, duration_sec):
     )
 
 
-def _take(snippets, indices, budget):
+def _fit(snippets, indices, budget):
     used = 0
-    taken = []
+    count = 0
     for i in indices:
         cost = _estimate_tokens(snippets[i].text)
-        if taken and used + cost > budget:
+        if count and used + cost > budget:
             break
-        taken.append(i)
+        count += 1
         used += cost
-    return taken
+    return count
 
 
 def _middle(snippets, duration_sec):

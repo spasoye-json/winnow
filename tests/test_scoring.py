@@ -298,6 +298,45 @@ def test_long_transcript_is_sampled_head_middle_tail(conn):
     assert "seg0800" not in content
 
 
+def test_word_triggered_transcript_within_token_budget_is_sent_once_whole(conn):
+    add_channel(conn, "UC1")
+    add_pending_video(conn, "UC1", "v1", duration_sec=1000)
+    llm = FakeLLM()
+    snippets = tuple(
+        Snippet(start=float(i), text=("pad " * 30).strip()) for i in range(335)
+    )
+    text = " ".join(snippet.text for snippet in snippets)
+    transcript = Transcript(text=text, language_code="en", snippets=snippets)
+
+    run_scoring(conn, fetcher(transcript), llm, model="m", now=NOW)
+
+    content = user_content(llm)
+    assert "10050 words" in content
+    assert OMISSION_MARKER not in content
+    assert content.count("pad") == 10050
+
+
+def test_overlapping_segments_merge_without_duplication(conn):
+    add_channel(conn, "UC1")
+    add_pending_video(conn, "UC1", "v1", duration_sec=188)
+    llm = FakeLLM()
+    snippets = tuple(
+        Snippet(start=float(i), text=(f"seg{i:04d} " * 40).strip())
+        for i in range(188)
+    )
+    text = " ".join(snippet.text for snippet in snippets)
+    transcript = Transcript(text=text, language_code="en", snippets=snippets)
+
+    run_scoring(conn, fetcher(transcript), llm, model="m", now=NOW)
+
+    content = user_content(llm)
+    assert content.count(OMISSION_MARKER) == 1
+    assert content.count("seg0070") == 40
+    assert "seg0000" in content
+    assert "seg0130" not in content
+    assert "seg0187" in content
+
+
 def test_long_transcript_stats_line_uses_full_word_count(conn):
     add_channel(conn, "UC1")
     add_pending_video(conn, "UC1", "v1", duration_sec=1000)
