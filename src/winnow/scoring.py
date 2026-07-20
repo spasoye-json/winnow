@@ -1,11 +1,22 @@
 import json
 import os
+import time
 from datetime import UTC, datetime
+
+from winnow.transcript import FailureClass, classify_transcript_error
 
 DEFAULT_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
 DEFAULT_MODEL = "gemini-3.1-flash-lite"
 
 PROMPT_VERSION = 1
+
+FULL_CONFIDENCE = 1.0
+METADATA_ONLY_CONFIDENCE = 0.5
+
+MAX_TRANSIENT_ATTEMPTS = 3
+INITIAL_BACKOFF_SEC = 2
+MAX_BACKOFF_SEC = 60
+MAX_UNKNOWN_ATTEMPTS = 2
 
 SYSTEM_PROMPT = """You are a strict quality curator for YouTube videos. You judge a \
 video only from its transcript and the metadata provided, scoring content quality \
@@ -54,17 +65,28 @@ OMISSION_MARKER = "[... transcript omitted ...]"
 INSERT_SCORE = """
 INSERT INTO scores
     (video_id, overall, info_density, originality, clickbait_gap, padding,
-     depth, production, hard_flags, summary, rationale, model, prompt_version,
-     scored_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     depth, production, hard_flags, summary, rationale, confidence, model,
+     prompt_version, scored_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 """
 
 STORE_TRANSCRIPT = (
     "UPDATE videos SET transcript_status = 'ok', caption_language = ? WHERE id = ?"
 )
 
+MARK_NO_TRANSCRIPT = (
+    "UPDATE videos SET transcript_status = 'no_transcript' WHERE id = ?"
+)
+
+MARK_FETCH_FAILED = (
+    "UPDATE videos SET transcript_status = 'fetch_failed', "
+    "transcript_attempts = ? WHERE id = ?"
+)
+
+RECORD_ATTEMPT = "UPDATE videos SET transcript_attempts = ? WHERE id = ?"
+
 SELECT_PENDING = (
-    "SELECT id, yt_video_id, title, duration_sec, view_count "
+    "SELECT id, yt_video_id, title, duration_sec, view_count, transcript_attempts "
     "FROM videos WHERE transcript_status = 'pending'"
 )
 
@@ -82,16 +104,61 @@ def build_client():
     )
 
 
-def run_scoring(conn, fetch_transcript, llm, model, now=None):
+def run_scoring(conn, fetch_transcript, llm, model, now=None, sleep=time.sleep):
     now = now or datetime.now(UTC).isoformat()
-    for video_id, yt_video_id, title, duration_sec, view_count in conn.execute(
-        SELECT_PENDING
-    ).fetchall():
-        transcript = fetch_transcript(yt_video_id)
-        conn.execute(STORE_TRANSCRIPT, (transcript.language_code, video_id))
-        result = _score(llm, model, title, duration_sec, view_count, transcript)
-        _store_score(conn, video_id, result, model, now)
+    pending = conn.execute(SELECT_PENDING).fetchall()
+    for video_id, yt_video_id, title, duration_sec, view_count, attempts in pending:
+        transcript, failure = _fetch(fetch_transcript, yt_video_id, sleep)
+        if failure is None:
+            conn.execute(STORE_TRANSCRIPT, (transcript.language_code, video_id))
+            _score_and_store(
+                conn, video_id, llm, model, title, duration_sec, view_count,
+                transcript, FULL_CONFIDENCE, now,
+            )
+        elif failure is FailureClass.IP_BLOCK:
+            break
+        elif failure is FailureClass.PERMANENT:
+            conn.execute(MARK_NO_TRANSCRIPT, (video_id,))
+            _score_and_store(
+                conn, video_id, llm, model, title, duration_sec, view_count,
+                None, METADATA_ONLY_CONFIDENCE, now,
+            )
+        elif failure is FailureClass.TRANSIENT:
+            continue
+        else:
+            attempts += 1
+            if attempts >= MAX_UNKNOWN_ATTEMPTS:
+                conn.execute(MARK_FETCH_FAILED, (attempts, video_id))
+                _score_and_store(
+                    conn, video_id, llm, model, title, duration_sec, view_count,
+                    None, METADATA_ONLY_CONFIDENCE, now,
+                )
+            else:
+                conn.execute(RECORD_ATTEMPT, (attempts, video_id))
     conn.commit()
+
+
+def _fetch(fetch_transcript, yt_video_id, sleep):
+    delay = INITIAL_BACKOFF_SEC
+    for attempt in range(MAX_TRANSIENT_ATTEMPTS):
+        try:
+            return fetch_transcript(yt_video_id), None
+        except Exception as exc:
+            failure = classify_transcript_error(exc)
+            if failure is not FailureClass.TRANSIENT:
+                return None, failure
+            if attempt < MAX_TRANSIENT_ATTEMPTS - 1:
+                sleep(delay)
+                delay = min(delay * 2, MAX_BACKOFF_SEC)
+    return None, FailureClass.TRANSIENT
+
+
+def _score_and_store(
+    conn, video_id, llm, model, title, duration_sec, view_count,
+    transcript, confidence, now,
+):
+    result = _score(llm, model, title, duration_sec, view_count, transcript)
+    _store_score(conn, video_id, result, model, confidence, now)
 
 
 def _score(llm, model, title, duration_sec, view_count, transcript):
@@ -119,6 +186,8 @@ def _user_content(title, duration_sec, view_count, transcript):
 
 
 def _transcript_body(transcript, duration_sec):
+    if transcript is None:
+        return "Transcript:\n(unavailable; metadata only)"
     if not transcript.snippets or not _should_sample(transcript.text):
         return f"Transcript:\n{transcript.text}"
     return _sampled_body(transcript, duration_sec)
@@ -224,7 +293,7 @@ def _join(snippets, indices):
     return " ".join(snippets[i].text for i in indices)
 
 
-def _store_score(conn, video_id, result, model, now):
+def _store_score(conn, video_id, result, model, confidence, now):
     scores = result["scores"]
     conn.execute(
         INSERT_SCORE,
@@ -240,6 +309,7 @@ def _store_score(conn, video_id, result, model, now):
             json.dumps(result["hard_flags"]),
             result["summary"],
             result["rationale"],
+            confidence,
             model,
             PROMPT_VERSION,
             now,

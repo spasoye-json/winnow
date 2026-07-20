@@ -2,11 +2,27 @@ import json
 from types import SimpleNamespace
 
 import pytest
+from requests.exceptions import ConnectionError, HTTPError
+from youtube_transcript_api import (
+    AgeRestricted,
+    IpBlocked,
+    NoTranscriptFound,
+    PoTokenRequired,
+    RequestBlocked,
+    TranscriptsDisabled,
+    VideoUnavailable,
+    VideoUnplayable,
+    YouTubeRequestFailed,
+)
 
 from winnow.db import connect, init_db
 from winnow.scoring import (
     DEFAULT_BASE_URL,
     DEFAULT_MODEL,
+    FULL_CONFIDENCE,
+    INITIAL_BACKOFF_SEC,
+    MAX_TRANSIENT_ATTEMPTS,
+    METADATA_ONLY_CONFIDENCE,
     OMISSION_MARKER,
     PROMPT_VERSION,
     SYSTEM_PROMPT,
@@ -61,6 +77,45 @@ def fetcher(transcript):
 
     fetch.calls = calls
     return fetch
+
+
+def raising_fetcher(exc, *, recover_after=None, transcript=None):
+    calls = []
+
+    def fetch(yt_video_id):
+        calls.append(yt_video_id)
+        if recover_after is not None and len(calls) > recover_after:
+            return transcript
+        raise exc
+
+    fetch.calls = calls
+    return fetch
+
+
+def recording_sleep():
+    delays = []
+
+    def sleep(seconds):
+        delays.append(seconds)
+
+    sleep.delays = delays
+    return sleep
+
+
+def transcript_row(conn, yt_video_id):
+    return conn.execute(
+        "SELECT transcript_status, transcript_attempts FROM videos "
+        "WHERE yt_video_id = ?",
+        (yt_video_id,),
+    ).fetchone()
+
+
+def confidence(conn, yt_video_id):
+    return conn.execute(
+        "SELECT s.confidence FROM scores s JOIN videos v ON v.id = s.video_id "
+        "WHERE v.yt_video_id = ?",
+        (yt_video_id,),
+    ).fetchone()
 
 
 class FakeAvailable:
@@ -380,3 +435,175 @@ def test_client_config_overridden_by_env(monkeypatch):
 
     assert model_name() == "deepseek-v4-flash"
     assert str(build_client().base_url) == "https://api.deepseek.com/"
+
+
+def test_successful_fetch_scores_at_full_confidence(conn):
+    add_channel(conn, "UC1")
+    add_pending_video(conn, "UC1", "v1")
+
+    run_scoring(
+        conn,
+        fetcher(Transcript(text="body", language_code="en")),
+        FakeLLM(),
+        model="m",
+        now=NOW,
+    )
+
+    assert confidence(conn, "v1") == (FULL_CONFIDENCE,)
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [
+        TranscriptsDisabled("v1"),
+        NoTranscriptFound("v1", ["en"], None),
+        VideoUnavailable("v1"),
+        VideoUnplayable("v1", "This video is unavailable", []),
+        AgeRestricted("v1"),
+    ],
+)
+def test_permanent_failure_sets_no_transcript_and_scores_metadata_only(conn, exc):
+    add_channel(conn, "UC1")
+    add_pending_video(conn, "UC1", "v1")
+    fetch = raising_fetcher(exc)
+    llm = FakeLLM()
+
+    run_scoring(conn, fetch, llm, model="m", now=NOW)
+
+    assert transcript_row(conn, "v1") == ("no_transcript", 0)
+    assert confidence(conn, "v1") == (METADATA_ONLY_CONFIDENCE,)
+    assert fetch.calls == ["v1"]
+    content = user_content(llm)
+    assert "Title: A title" in content
+    assert "(unavailable; metadata only)" in content
+
+
+def test_permanent_failure_is_never_retried(conn):
+    add_channel(conn, "UC1")
+    add_pending_video(conn, "UC1", "v1")
+    fetch = raising_fetcher(TranscriptsDisabled("v1"))
+
+    run_scoring(conn, fetch, FakeLLM(), model="m", now=NOW)
+    run_scoring(conn, fetch, FakeLLM(), model="m", now=NOW)
+
+    assert fetch.calls == ["v1"]
+
+
+@pytest.mark.parametrize("exc", [RequestBlocked("v1"), IpBlocked("v1")])
+def test_ip_block_trips_circuit_breaker_and_defers_batch(conn, exc):
+    add_channel(conn, "UC1")
+    add_pending_video(conn, "UC1", "first")
+    add_pending_video(conn, "UC1", "second")
+    fetch = raising_fetcher(exc)
+
+    run_scoring(conn, fetch, FakeLLM(), model="m", now=NOW)
+
+    assert fetch.calls == ["first"]
+    assert transcript_row(conn, "first") == ("pending", 0)
+    assert transcript_row(conn, "second") == ("pending", 0)
+    assert score_row(conn, "first") is None
+
+
+def test_ip_block_mid_batch_keeps_earlier_scores_and_defers_remainder(conn):
+    add_channel(conn, "UC1")
+    add_pending_video(conn, "UC1", "first")
+    add_pending_video(conn, "UC1", "second")
+    add_pending_video(conn, "UC1", "third")
+    calls = []
+
+    def fetch(yt_video_id):
+        calls.append(yt_video_id)
+        if yt_video_id == "first":
+            return Transcript(text="body", language_code="en")
+        raise IpBlocked(yt_video_id)
+
+    run_scoring(conn, fetch, FakeLLM(), model="m", now=NOW)
+
+    assert calls == ["first", "second"]
+    assert transcript_row(conn, "first") == ("ok", 0)
+    assert score_row(conn, "first") is not None
+    assert transcript_row(conn, "second") == ("pending", 0)
+    assert transcript_row(conn, "third") == ("pending", 0)
+
+
+def test_server_error_is_transient_and_defers(conn):
+    add_channel(conn, "UC1")
+    add_pending_video(conn, "UC1", "v1")
+    error = YouTubeRequestFailed(
+        "v1", HTTPError("503 Server Error: Service Unavailable")
+    )
+    fetch = raising_fetcher(error)
+    sleep = recording_sleep()
+
+    run_scoring(conn, fetch, FakeLLM(), model="m", now=NOW, sleep=sleep)
+
+    assert len(fetch.calls) == MAX_TRANSIENT_ATTEMPTS
+    assert transcript_row(conn, "v1") == ("pending", 0)
+    assert score_row(conn, "v1") is None
+
+
+def test_client_error_is_unknown_and_records_attempt(conn):
+    add_channel(conn, "UC1")
+    add_pending_video(conn, "UC1", "v1")
+    error = YouTubeRequestFailed("v1", HTTPError("404 Client Error: Not Found"))
+    fetch = raising_fetcher(error)
+    sleep = recording_sleep()
+
+    run_scoring(conn, fetch, FakeLLM(), model="m", now=NOW, sleep=sleep)
+
+    assert fetch.calls == ["v1"]
+    assert sleep.delays == []
+    assert transcript_row(conn, "v1") == ("pending", 1)
+    assert score_row(conn, "v1") is None
+
+
+def test_transient_failure_backs_off_then_defers(conn):
+    add_channel(conn, "UC1")
+    add_pending_video(conn, "UC1", "v1")
+    error = YouTubeRequestFailed("v1", HTTPError("429 Client Error: Too Many Requests"))
+    fetch = raising_fetcher(error)
+    sleep = recording_sleep()
+
+    run_scoring(conn, fetch, FakeLLM(), model="m", now=NOW, sleep=sleep)
+
+    assert len(fetch.calls) == MAX_TRANSIENT_ATTEMPTS
+    assert sleep.delays == [
+        INITIAL_BACKOFF_SEC * (2**attempt)
+        for attempt in range(MAX_TRANSIENT_ATTEMPTS - 1)
+    ]
+    assert transcript_row(conn, "v1") == ("pending", 0)
+    assert score_row(conn, "v1") is None
+
+
+def test_transient_failure_that_recovers_is_scored(conn):
+    add_channel(conn, "UC1")
+    add_pending_video(conn, "UC1", "v1")
+    error = ConnectionError("temporary network glitch")
+    fetch = raising_fetcher(
+        error,
+        recover_after=1,
+        transcript=Transcript(text="body", language_code="en"),
+    )
+    sleep = recording_sleep()
+
+    run_scoring(conn, fetch, FakeLLM(), model="m", now=NOW, sleep=sleep)
+
+    assert transcript_row(conn, "v1") == ("ok", 0)
+    assert confidence(conn, "v1") == (FULL_CONFIDENCE,)
+    assert sleep.delays == [INITIAL_BACKOFF_SEC]
+
+
+def test_unknown_failure_retries_across_two_runs_then_fetch_failed(conn):
+    add_channel(conn, "UC1")
+    add_pending_video(conn, "UC1", "v1")
+    fetch = raising_fetcher(PoTokenRequired("v1"))
+
+    run_scoring(conn, fetch, FakeLLM(), model="m", now=NOW)
+
+    assert transcript_row(conn, "v1") == ("pending", 1)
+    assert score_row(conn, "v1") is None
+
+    run_scoring(conn, fetch, FakeLLM(), model="m", now=NOW)
+
+    assert transcript_row(conn, "v1") == ("fetch_failed", 2)
+    assert confidence(conn, "v1") == (METADATA_ONLY_CONFIDENCE,)
