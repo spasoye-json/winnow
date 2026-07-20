@@ -49,6 +49,8 @@ PAYLOAD = {
     "rationale": "Because the analysis is dense and original.",
 }
 
+PAYLOAD_NO_FLAGS = {**PAYLOAD, "hard_flags": []}
+
 
 class FakeCompletions:
     def __init__(self, payload):
@@ -196,9 +198,6 @@ def hard_flags(conn, yt_video_id):
         (yt_video_id,),
     ).fetchone()
     return json.loads(raw)
-
-
-PAYLOAD_NO_FLAGS = {**PAYLOAD, "hard_flags": []}
 
 
 def dimensions(conn, yt_video_id):
@@ -705,6 +704,51 @@ def test_exempt_channel_still_keeps_ai_voice_flag(conn):
     )
 
     assert hard_flags(conn, "v1") == ["ai_voice"]
+
+
+def test_transcript_exactly_at_ratio_is_not_flagged(conn):
+    add_channel(conn, "UC1")
+    add_pending_video(conn, "UC1", "v1", duration_sec=600)
+
+    run_scoring(
+        conn,
+        fetcher(Transcript(text=" ".join(["word"] * 300), language_code="en")),
+        FakeLLM(PAYLOAD_NO_FLAGS),
+        model="m",
+        now=NOW,
+    )
+
+    assert hard_flags(conn, "v1") == []
+
+
+def test_rubric_low_transcript_is_ignored_when_ratio_is_met(conn):
+    add_channel(conn, "UC1")
+    add_pending_video(conn, "UC1", "v1", duration_sec=600)
+
+    run_scoring(
+        conn,
+        fetcher(Transcript(text=" ".join(["word"] * 400), language_code="en")),
+        FakeLLM({**PAYLOAD, "hard_flags": ["low_transcript"]}),
+        model="m",
+        now=NOW,
+    )
+
+    assert hard_flags(conn, "v1") == []
+
+
+def test_ai_voice_and_low_transcript_flags_combine(conn):
+    add_channel(conn, "UC1")
+    add_pending_video(conn, "UC1", "v1", duration_sec=600)
+
+    run_scoring(
+        conn,
+        fetcher(Transcript(text="a very short body", language_code="en")),
+        FakeLLM(PAYLOAD),
+        model="m",
+        now=NOW,
+    )
+
+    assert hard_flags(conn, "v1") == ["ai_voice", "low_transcript"]
 
 
 def test_metadata_only_video_gets_no_low_transcript_flag(conn):
