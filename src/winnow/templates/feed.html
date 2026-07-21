@@ -43,6 +43,23 @@
   <p>Videos above threshold {{ "%.1f"|format(threshold) }}, ranked by quality.</p>
 </header>
 
+<form method="get" role="search">
+  <select name="channel" aria-label="Channel">
+    <option value="">All channels</option>
+    {% for ch in channels %}
+    <option value="{{ ch.yt_channel_id }}"
+            {% if ch.yt_channel_id == filters.channel %}selected{% endif %}>
+      {{ ch.name }}
+    </option>
+    {% endfor %}
+  </select>
+  <input type="date" name="since" aria-label="Published since"
+         value="{{ filters.since or '' }}" />
+  <input type="date" name="until" aria-label="Published until"
+         value="{{ filters.until or '' }}" />
+  <button type="submit">Filter</button>
+</form>
+
 <aside>
   <p>
     <strong>Genre bias:</strong> scores read the transcript, so visual-first genres

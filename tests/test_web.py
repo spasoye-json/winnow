@@ -76,10 +76,10 @@ def _set_setting(conn, key, value):
     )
 
 
-def _get(db_path):
+def _get(db_path, params=None):
     app = create_app(str(db_path), str(db_path.parent / "missing_secrets.json"))
     with TestClient(app) as client:
-        return client.get("/")
+        return client.get("/", params=params)
 
 
 def _get_detail(db_path, yt_video_id):
@@ -363,6 +363,134 @@ def test_detail_effective_score_recomputed_from_weights(tmp_path):
 
     body = _get_detail(db_path, "vid").text
     assert "8.0" in body
+
+
+def test_feed_filters_by_channel(tmp_path):
+    db_path = _seed_db(tmp_path)
+    conn = connect(str(db_path))
+    alpha = _channel(conn, "Alpha", "chanA")
+    beta = _channel(conn, "Beta", "chanB")
+    va = _video(conn, "vidA", alpha, title="Alpha video")
+    vb = _video(conn, "vidB", beta, title="Beta video")
+    _score(conn, va, _flat(8.0), overall=8.0)
+    _score(conn, vb, _flat(8.0), overall=8.0)
+    conn.commit()
+    conn.close()
+
+    body = _get(db_path, {"channel": "chanA"}).text
+    assert "Alpha video" in body
+    assert "Beta video" not in body
+
+
+def test_feed_filters_by_since_date(tmp_path):
+    db_path = _seed_db(tmp_path)
+    conn = connect(str(db_path))
+    channel_id = _channel(conn, "Chan", "chan1")
+    old = _video(conn, "old", channel_id, title="Old video",
+                 published_at="2026-07-01T00:00:00+00:00")
+    new = _video(conn, "new", channel_id, title="New video",
+                 published_at="2026-07-20T00:00:00+00:00")
+    _score(conn, old, _flat(8.0), overall=8.0)
+    _score(conn, new, _flat(8.0), overall=8.0)
+    conn.commit()
+    conn.close()
+
+    body = _get(db_path, {"since": "2026-07-10"}).text
+    assert "New video" in body
+    assert "Old video" not in body
+
+
+def test_feed_filters_by_until_date(tmp_path):
+    db_path = _seed_db(tmp_path)
+    conn = connect(str(db_path))
+    channel_id = _channel(conn, "Chan", "chan1")
+    old = _video(conn, "old", channel_id, title="Old video",
+                 published_at="2026-07-01T00:00:00+00:00")
+    new = _video(conn, "new", channel_id, title="New video",
+                 published_at="2026-07-20T00:00:00+00:00")
+    _score(conn, old, _flat(8.0), overall=8.0)
+    _score(conn, new, _flat(8.0), overall=8.0)
+    conn.commit()
+    conn.close()
+
+    body = _get(db_path, {"until": "2026-07-10"}).text
+    assert "Old video" in body
+    assert "New video" not in body
+
+
+def test_until_date_is_inclusive_of_the_whole_day(tmp_path):
+    db_path = _seed_db(tmp_path)
+    conn = connect(str(db_path))
+    channel_id = _channel(conn, "Chan", "chan1")
+    same_day = _video(conn, "same", channel_id, title="Same day video",
+                      published_at="2026-07-10T18:30:00+00:00")
+    _score(conn, same_day, _flat(8.0), overall=8.0)
+    conn.commit()
+    conn.close()
+
+    body = _get(db_path, {"until": "2026-07-10"}).text
+    assert "Same day video" in body
+
+
+def test_filters_compose_with_threshold_and_ranking(tmp_path):
+    db_path = _seed_db(tmp_path)
+    conn = connect(str(db_path))
+    alpha = _channel(conn, "Alpha", "chanA")
+    beta = _channel(conn, "Beta", "chanB")
+    high = _video(conn, "high", alpha, title="Alpha high")
+    mid = _video(conn, "mid", alpha, title="Alpha mid")
+    low = _video(conn, "low", alpha, title="Alpha low")
+    other = _video(conn, "other", beta, title="Beta other")
+    _score(conn, high, _flat(9.0), overall=9.0)
+    _score(conn, mid, _flat(8.0), overall=8.0)
+    _score(conn, low, _flat(6.5), overall=6.5)
+    _score(conn, other, _flat(9.0), overall=9.0)
+    _set_setting(conn, "threshold", "7.0")
+    conn.commit()
+    conn.close()
+
+    body = _get(db_path, {"channel": "chanA"}).text
+    assert "Beta other" not in body
+
+    feed_section = body.split("Below threshold", 1)[0]
+    assert "Alpha high" in feed_section
+    assert "Alpha mid" in feed_section
+    assert "Alpha low" not in feed_section
+    assert feed_section.index("Alpha high") < feed_section.index("Alpha mid")
+
+    below = body.split("Below threshold", 1)[1]
+    assert "Alpha low" in below
+
+
+def test_empty_filter_params_return_unfiltered_feed(tmp_path):
+    db_path = _seed_db(tmp_path)
+    conn = connect(str(db_path))
+    channel_id = _channel(conn, "Chan", "chan1")
+    video_id = _video(conn, "vid", channel_id, title="Unfiltered video")
+    _score(conn, video_id, _flat(8.0), overall=8.0)
+    conn.commit()
+    conn.close()
+
+    body = _get(db_path, {"channel": "", "since": "", "until": ""}).text
+    assert "Unfiltered video" in body
+
+
+def test_filter_form_lists_channels(tmp_path):
+    db_path = _seed_db(tmp_path)
+    conn = connect(str(db_path))
+    alpha = _channel(conn, "Alpha", "chanA")
+    beta = _channel(conn, "Beta", "chanB")
+    _score(conn, _video(conn, "vidA", alpha), _flat(8.0), overall=8.0)
+    _score(conn, _video(conn, "vidB", beta), _flat(8.0), overall=8.0)
+    conn.commit()
+    conn.close()
+
+    body = _get(db_path).text
+    assert 'name="channel"' in body
+    assert 'name="since"' in body
+    assert 'name="until"' in body
+    assert 'value="chanA"' in body
+    assert 'value="chanB"' in body
 
 
 def test_no_cdn_assets(tmp_path):
