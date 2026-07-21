@@ -3,14 +3,14 @@ import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from winnow import auth
 from winnow.db import connect
-from winnow.feed import build_feed
+from winnow.feed import build_detail, build_feed
 from winnow.scheduler import due_check_loop, tick
 from winnow.youtube import build_client
 
@@ -77,5 +77,16 @@ def create_app(db_path, client_secrets_path):
         finally:
             conn.close()
         return templates.TemplateResponse(request, "feed.html", context)
+
+    @app.get("/video/{yt_video_id}", response_class=HTMLResponse)
+    def video_detail(request: Request, yt_video_id: str):
+        conn = connect(db_path)
+        try:
+            detail = build_detail(conn, yt_video_id)
+        finally:
+            conn.close()
+        if detail is None:
+            raise HTTPException(status_code=404)
+        return templates.TemplateResponse(request, "detail.html", detail)
 
     return app

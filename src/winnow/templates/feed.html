@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 
 {% macro thumbnail(card) %}
-<a href="{{ card.youtube_url }}">
+<a href="{{ card.detail_url }}">
   {% if card.thumbnail_url %}
   <img src="{{ card.thumbnail_url }}" alt="Thumbnail for {{ card.title }}" />
   {% endif %}
@@ -15,9 +15,10 @@
     <span class="score-badge">{{ card.score_display }}</span>
     {% if card.metadata_only %}<span class="marker">🛈 metadata-only</span>{% endif %}
     {% for flag in card.hard_flags %}<span class="marker">⚑ {{ flag }}</span>{% endfor %}
-    <h3><a href="{{ card.youtube_url }}">{{ card.title }}</a></h3>
+    <h3><a href="{{ card.detail_url }}">{{ card.title }}</a></h3>
     {% if card.channel %}<p>{{ card.channel }}</p>{% endif %}
     <p>{{ card.summary }}</p>
+    <a href="{{ card.detail_url }}">Why this score</a>
     <a href="{{ card.youtube_url }}" role="button">Watch on YouTube</a>
   </div>
 </article>
@@ -28,8 +29,9 @@
   {{ thumbnail(card) }}
   <div>
     <span class="marker">{{ card.reason }}</span>
-    <h3><a href="{{ card.youtube_url }}">{{ card.title }}</a></h3>
+    <h3><a href="{{ card.detail_url }}">{{ card.title }}</a></h3>
     {% if card.channel %}<p>{{ card.channel }}</p>{% endif %}
+    <a href="{{ card.detail_url }}">Details</a>
     <a href="{{ card.youtube_url }}" role="button">Watch on YouTube</a>
   </div>
 </article>
