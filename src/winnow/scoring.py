@@ -13,7 +13,7 @@ logger = logging.getLogger("winnow.scoring")
 DEFAULT_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
 DEFAULT_MODEL = "gemini-3.1-flash-lite"
 
-PROMPT_VERSION = 1
+PROMPT_VERSION = 2
 
 FULL_CONFIDENCE = 1.0
 METADATA_ONLY_CONFIDENCE = 0.5
@@ -47,9 +47,24 @@ UPSERT_SETTING = (
     "ON CONFLICT(key) DO UPDATE SET value = excluded.value"
 )
 
-SYSTEM_PROMPT = """You are a strict quality curator for YouTube videos. You judge a \
+SAMPLE_TOKEN_TRIGGER = 15000
+SAMPLE_WORD_TRIGGER = 10000
+HEAD_TOKENS = 6000
+MIDDLE_TOKENS = 5000
+TAIL_TOKENS = 4000
+OMISSION_MARKER = "[... transcript omitted ...]"
+
+SYSTEM_PROMPT = f"""You are a strict quality curator for YouTube videos. You judge a \
 video only from its transcript and the metadata provided, scoring content quality \
 rather than popularity. Ignore view count entirely as a quality signal.
+
+The transcript may be in any language. Always write the summary and rationale in \
+English regardless of the transcript's language.
+
+A long transcript is sampled rather than sent whole: you receive its head, then its \
+middle, then its tail, and each omitted span between them is replaced by a line \
+reading "{OMISSION_MARKER}". Treat every such marker as a gap where transcript was \
+left out, not as content, and judge the video from the sampled spans that remain.
 
 Score each of these six dimensions from 0 to 10 (10 is best):
 
@@ -76,20 +91,55 @@ Also produce:
 - hard_flags: a list of strings, using "ai_voice" when the narration looks like an \
 AI content farm and "low_transcript" when the transcript is far shorter than the \
 runtime implies. Use an empty list when neither applies.
-- summary: a neutral 2 to 3 sentence summary of what the video covers.
-- rationale: one paragraph explaining the scores.
+- summary: a neutral 2 to 3 sentence summary of what the video covers, in English.
+- rationale: one paragraph explaining the scores, in English.
 
-Return only valid JSON in exactly this shape, with no prose outside it:
-{"scores": {"info_density": 0, "originality": 0, "clickbait_gap": 0, "padding": 0, \
-"depth": 0, "production": 0}, "overall": 0.0, "hard_flags": [], "summary": "", \
-"rationale": ""}"""
+Your response must match the required schema exactly, with no prose outside it."""
 
-SAMPLE_TOKEN_TRIGGER = 15000
-SAMPLE_WORD_TRIGGER = 10000
-HEAD_TOKENS = 6000
-MIDDLE_TOKENS = 5000
-TAIL_TOKENS = 4000
-OMISSION_MARKER = "[... transcript omitted ...]"
+RESPONSE_SCHEMA = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "video_score",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "scores": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "info_density": {"type": "integer"},
+                        "originality": {"type": "integer"},
+                        "clickbait_gap": {"type": "integer"},
+                        "padding": {"type": "integer"},
+                        "depth": {"type": "integer"},
+                        "production": {"type": "integer"},
+                    },
+                    "required": [
+                        "info_density",
+                        "originality",
+                        "clickbait_gap",
+                        "padding",
+                        "depth",
+                        "production",
+                    ],
+                },
+                "overall": {"type": "number"},
+                "hard_flags": {"type": "array", "items": {"type": "string"}},
+                "summary": {"type": "string"},
+                "rationale": {"type": "string"},
+            },
+            "required": [
+                "scores",
+                "overall",
+                "hard_flags",
+                "summary",
+                "rationale",
+            ],
+        },
+    },
+}
 
 INSERT_SCORE = """
 INSERT INTO scores
@@ -330,7 +380,7 @@ def _score(llm, model, title, duration_sec, view_count, transcript):
                 "content": _user_content(title, duration_sec, view_count, transcript),
             },
         ],
-        response_format={"type": "json_object"},
+        response_format=RESPONSE_SCHEMA,
     )
     return json.loads(response.choices[0].message.content)
 

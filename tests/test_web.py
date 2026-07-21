@@ -4,6 +4,7 @@ from fastapi.testclient import TestClient
 
 from winnow.cli import main
 from winnow.db import connect
+from winnow.scoring import PROMPT_VERSION
 from winnow.web import create_app
 
 
@@ -1044,7 +1045,7 @@ def _get_calibration(db_path):
 
 
 def _judged(conn, channel_id, yt_video_id, dims, verdict, *, title="A title",
-            model="gemini-3.1-flash-lite", prompt_version=1):
+            model="gemini-3.1-flash-lite", prompt_version=PROMPT_VERSION):
     video_id = _video(conn, yt_video_id, channel_id, title=title)
     conn.execute(
         "INSERT INTO scores (video_id, overall, info_density, originality, "
@@ -1219,7 +1220,7 @@ def test_calibration_scoped_to_current_model_and_prompt_version(tmp_path):
     _judged(conn, ch, "othermodel", _flat(4.0), "great", title="Other model",
             model="other-model")
     _judged(conn, ch, "oldprompt", _flat(8.0), "slop", title="Old prompt",
-            prompt_version=2)
+            prompt_version=PROMPT_VERSION - 1)
     conn.commit()
     conn.close()
 
@@ -1271,7 +1272,7 @@ def test_calibration_scopes_to_current_model_and_prompt_in_footer(tmp_path):
     db_path = _seed_db(tmp_path)
     body = _get_calibration(db_path).text
     assert "gemini-3.1-flash-lite" in body
-    assert "prompt v1" in body
+    assert f"prompt v{PROMPT_VERSION}" in body
 
 
 def test_feed_links_to_calibration(tmp_path):
