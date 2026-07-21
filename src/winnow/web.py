@@ -97,13 +97,13 @@ def create_app(db_path, client_secrets_path):
 
     @app.post("/settings")
     def update_settings(
-        threshold: float = Form(...),
-        info_density: float = Form(...),
-        originality: float = Form(...),
-        clickbait_gap: float = Form(...),
-        padding: float = Form(...),
-        depth: float = Form(...),
-        production: float = Form(...),
+        threshold: float = Form(..., ge=0, le=10),
+        info_density: float = Form(..., ge=0, le=100),
+        originality: float = Form(..., ge=0, le=100),
+        clickbait_gap: float = Form(..., ge=0, le=100),
+        padding: float = Form(..., ge=0, le=100),
+        depth: float = Form(..., ge=0, le=100),
+        production: float = Form(..., ge=0, le=100),
     ):
         weights = {
             "info_density": info_density,

@@ -761,6 +761,22 @@ def test_settings_change_reranks_feed_instantly_without_rescoring(tmp_path):
     assert "Weight sensitive" in below
 
 
+def test_settings_form_rejects_out_of_range_values(tmp_path):
+    db_path = _seed_db(tmp_path)
+
+    for bad in ({"threshold": "10.5"}, {"threshold": "-1"},
+                {"padding": "-5"}, {"depth": "101"}):
+        response = _post_settings(db_path, {**DEFAULT_SETTINGS_FORM, **bad})
+        assert response.status_code == 422
+
+    conn = connect(str(db_path))
+    stored = conn.execute(
+        "SELECT COUNT(*) FROM settings WHERE key IN ('threshold', 'weights')"
+    ).fetchone()[0]
+    conn.close()
+    assert stored == 0
+
+
 def test_feed_links_to_settings(tmp_path):
     db_path = _seed_db(tmp_path)
     body = _get(db_path).text
