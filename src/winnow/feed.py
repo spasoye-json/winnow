@@ -164,12 +164,10 @@ def build_detail(conn, yt_video_id):
     weights = load_weights(conn)
     score = effective_score(dims, weights)
     detail.update({
-        "score": score,
         "score_display": f"{score:.1f}",
         "dimensions": [
             {
                 "label": DIMENSION_LABELS[d],
-                "score": dims[d],
                 "score_display": f"{dims[d]:.1f}",
                 "weight_display": f"{weights[d]:.2f}",
                 "pct": max(0.0, min(dims[d] * 10, 100.0)),

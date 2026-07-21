@@ -37,7 +37,7 @@
 <h2>Score breakdown</h2>
 <table>
   <thead>
-    <tr><th>Dimension</th><th>Weight</th><th>Score</th></tr>
+    <tr><th>Dimension</th><th>Weight</th><th>Score</th><th></th></tr>
   </thead>
   <tbody>
     {% for dim in dimensions %}
@@ -45,6 +45,7 @@
       <td>{{ dim.label }}</td>
       <td>{{ dim.weight_display }}</td>
       <td>{{ dim.score_display }}</td>
+      <td><progress value="{{ dim.pct }}" max="100" aria-hidden="true"></progress></td>
     </tr>
     {% endfor %}
   </tbody>

@@ -331,6 +331,21 @@ def test_detail_reachable_from_feed_card(tmp_path):
     assert "/video/vid123" in body
 
 
+def test_detail_unscored_video_shows_reason_without_breakdown(tmp_path):
+    db_path = _seed_db(tmp_path)
+    conn = connect(str(db_path))
+    channel_id = _channel(conn, "Chan", "chan1")
+    _video(conn, "pend", channel_id, title="Pending video",
+           transcript_status="pending")
+    conn.commit()
+    conn.close()
+
+    body = _get_detail(db_path, "pend").text
+    assert "Pending video" in body
+    assert "awaiting scoring" in body
+    assert "Score breakdown" not in body
+
+
 def test_detail_unknown_video_is_404(tmp_path):
     db_path = _seed_db(tmp_path)
     response = _get_detail(db_path, "nope")
