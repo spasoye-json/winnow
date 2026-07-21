@@ -96,9 +96,7 @@ def build_feed(conn, channel=None, since=None, until=None):
     query, params = _filtered_query(channel, since, until)
     feed, below, flagged, unscored = [], [], [], []
     for row in conn.execute(query, params).fetchall():
-        (yt_id, title, thumbnail, status, channel_name, *rest) = row
-        verdict = rest[-1]
-        score_cols = rest[:-1]
+        (yt_id, title, thumbnail, status, channel_name, *score_cols, verdict) = row
         info = score_cols[0]
         if info is None:
             unscored.append(
