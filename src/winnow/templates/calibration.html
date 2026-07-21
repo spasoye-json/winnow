@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+
+{% block content %}
+<p><a href="/">&larr; Back to feed</a></p>
+
+<header>
+  <h1>Calibration audit</h1>
+  <p>How well quality scores agree with your own verdicts.</p>
+</header>
+
+{% if bar_failed %}
+<article class="bar-failed" role="alert">
+  The 80% agreement bar has failed with a valid sample. Iterate on the rubric
+  prompt, informed by the disagreements below.
+</article>
+{% endif %}
+
+<div class="agreement-tiles">
+  {% for t in tiles %}
+  <article class="agreement-tile{% if t.met %} met{% endif %}">
+    <div class="tile-head">
+      <span>{{ t.label }}</span>
+      {% if t.provisional %}<span class="marker provisional">Provisional</span>{% endif %}
+    </div>
+    <div class="tile-pct">{{ t.pct_display }}</div>
+    <div class="tile-sub">{{ t.count_display }}</div>
+    {% if t.provisional %}<div class="tile-needed">{{ t.needed_display }}</div>{% endif %}
+  </article>
+  {% endfor %}
+</div>
+
+<h2>Where we disagree</h2>
+<p>Sorted by distance from the threshold ({{ threshold_display }}).</p>
+
+{% if disagreements %}
+<div class="disagreement-list">
+  <div class="disagreement-row disagreement-head">
+    <span>Video</span>
+    <span>Verdict</span>
+    <span>Score</span>
+    <span class="dims">
+      {% for h in dimension_headers %}<span title="{{ h.label }}">{{ h.abbr }}</span>{% endfor %}
+    </span>
+  </div>
+  {% for d in disagreements %}
+  <div class="disagreement-row">
+    <span>
+      <a href="{{ d.detail_url }}">{{ d.title }}</a>
+      {% if d.channel %}<small>{{ d.channel }}</small>{% endif %}
+    </span>
+    <span><span class="marker verdict-tag verdict-{{ d.verdict }}">{{ d.verdict }}</span></span>
+    <span class="score">{{ d.score_display }}</span>
+    <span class="dims">
+      {% for dim in d.dimensions %}<span title="{{ dim.label }}">{{ dim.score_display }}</span>{% endfor %}
+    </span>
+  </div>
+  {% endfor %}
+</div>
+{% else %}
+<p>No disagreements. Scores and verdicts currently align.</p>
+{% endif %}
+
+<footer>
+  <p>
+    <small>
+      ID information density, OR originality, CB clickbait gap, PA padding,
+      DE depth, PR production integrity.<br />
+      Audit covers only videos scored under {{ model }} · prompt v{{ prompt_version }}.
+    </small>
+  </p>
+</footer>
+{% endblock %}

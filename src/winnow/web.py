@@ -14,6 +14,7 @@ from winnow.db import connect
 from winnow.feed import (
     add_channel,
     add_topic,
+    build_calibration,
     build_detail,
     build_feed,
     build_settings,
@@ -90,6 +91,15 @@ def create_app(db_path, client_secrets_path):
         finally:
             conn.close()
         return templates.TemplateResponse(request, "feed.html", context)
+
+    @app.get("/calibration", response_class=HTMLResponse)
+    def calibration(request: Request):
+        conn = connect(db_path)
+        try:
+            context = build_calibration(conn)
+        finally:
+            conn.close()
+        return templates.TemplateResponse(request, "calibration.html", context)
 
     @app.get("/settings", response_class=HTMLResponse)
     def settings_page(request: Request):

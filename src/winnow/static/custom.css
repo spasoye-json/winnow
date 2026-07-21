@@ -112,6 +112,104 @@
   margin: 0;
 }
 
+.bar-failed {
+  border-left: 4px solid var(--pico-del-color, #b3261e);
+  padding: 0.75rem 1rem;
+}
+
+.agreement-tiles {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1.25rem;
+}
+
+.agreement-tile {
+  padding: 1.25rem 1.5rem;
+}
+
+.agreement-tile.met {
+  border-color: var(--pico-ins-color, #2f7d54);
+}
+
+.tile-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 600;
+}
+
+.tile-pct {
+  font-size: 2.5rem;
+  font-weight: 700;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+}
+
+.tile-sub,
+.tile-needed {
+  font-size: 0.85rem;
+  color: var(--pico-muted-color);
+}
+
+.provisional {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  background: var(--pico-muted-border-color);
+  color: var(--pico-color);
+}
+
+.disagreement-row {
+  display: grid;
+  grid-template-columns: 1fr 84px 56px 216px;
+  gap: 0.9rem;
+  align-items: center;
+  padding: 0.6rem 0;
+  border-bottom: 1px solid var(--pico-muted-border-color);
+}
+
+.disagreement-head {
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--pico-muted-color);
+}
+
+.disagreement-row .score {
+  text-align: right;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+.disagreement-row .dims {
+  display: flex;
+  gap: 0.5rem;
+  justify-content: flex-end;
+  font-family: ui-monospace, Menlo, monospace;
+}
+
+.disagreement-row .dims span {
+  width: 24px;
+  text-align: center;
+}
+
+.disagreement-row small {
+  display: block;
+  color: var(--pico-muted-color);
+}
+
+.verdict-tag {
+  margin-left: 0;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  padding: 0.1rem 0.55rem;
+  border-radius: 999px;
+  background: var(--pico-muted-border-color);
+}
+
 .sr-only {
   position: absolute;
   width: 1px;
