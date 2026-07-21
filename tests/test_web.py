@@ -49,7 +49,7 @@ def _video(conn, yt_video_id, channel_id, *, title="A title",
 
 
 def _score(conn, video_id, dims, *, overall=0.0, hard_flags=None, summary="A summary.",
-           confidence=1.0):
+           confidence=1.0, scored_at="2026-07-20T01:00:00+00:00"):
     conn.execute(
         "INSERT INTO scores (video_id, overall, info_density, originality, "
         "clickbait_gap, padding, depth, production, hard_flags, summary, rationale, "
@@ -59,7 +59,7 @@ def _score(conn, video_id, dims, *, overall=0.0, hard_flags=None, summary="A sum
             video_id, overall, dims["info_density"], dims["originality"],
             dims["clickbait_gap"], dims["padding"], dims["depth"], dims["production"],
             json.dumps(hard_flags or []), summary, "rationale", confidence,
-            "gemini-3.1-flash-lite", 1, "2026-07-20T01:00:00+00:00",
+            "gemini-3.1-flash-lite", 1, scored_at,
         ),
     )
 
@@ -130,6 +130,37 @@ def test_effective_score_recomputed_not_stored_overall(tmp_path):
     body = _get(db_path).text
     assert "8.0" in body
     assert "Recomputed" in body
+
+
+def test_rescored_video_uses_latest_score(tmp_path):
+    db_path = _seed_db(tmp_path)
+    conn = connect(str(db_path))
+    channel_id = _channel(conn, "Chan", "chan1")
+    video_id = _video(conn, "vid", channel_id, title="Rescored")
+    _score(conn, video_id, _flat(9.0), overall=9.0, summary="Latest verdict.",
+           scored_at="2026-07-20T02:00:00+00:00")
+    _score(conn, video_id, _flat(2.0), overall=2.0, summary="Stale verdict.",
+           scored_at="2026-07-19T01:00:00+00:00")
+    conn.commit()
+    conn.close()
+
+    body = _get(db_path).text
+    assert "Latest verdict." in body
+    assert "Stale verdict." not in body
+
+
+def test_missing_thumbnail_and_channel_render_without_placeholders(tmp_path):
+    db_path = _seed_db(tmp_path)
+    conn = connect(str(db_path))
+    video_id = _video(conn, "bare", None, title="Bare video", thumbnail=None)
+    _score(conn, video_id, _flat(8.0), overall=8.0)
+    conn.commit()
+    conn.close()
+
+    body = _get(db_path).text
+    assert "Bare video" in body
+    assert 'src="None"' not in body
+    assert ">None<" not in body
 
 
 def test_weights_change_moves_video_below_threshold(tmp_path):
