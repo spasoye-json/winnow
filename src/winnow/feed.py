@@ -83,6 +83,36 @@ def load_threshold(conn):
     return float(row[0])
 
 
+def save_settings(conn, threshold, weights):
+    _set_setting(conn, "threshold", str(threshold))
+    _set_setting(conn, "weights", json.dumps(weights))
+    conn.commit()
+
+
+def _set_setting(conn, key, value):
+    conn.execute(
+        "INSERT INTO settings (key, value) VALUES (?, ?) "
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        (key, value),
+    )
+
+
+def build_settings(conn):
+    weights = load_weights(conn)
+    threshold = load_threshold(conn)
+    return {
+        "threshold_display": f"{threshold:.1f}",
+        "weights": [
+            {
+                "key": d,
+                "label": DIMENSION_LABELS[d],
+                "percent": round(weights[d] * 100),
+            }
+            for d in DIMENSIONS
+        ],
+    }
+
+
 def effective_score(dims, weights):
     total = sum(weights.values())
     if not total:
