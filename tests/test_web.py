@@ -76,13 +76,7 @@ def _set_setting(conn, key, value):
     )
 
 
-def _get(db_path):
-    app = create_app(str(db_path), str(db_path.parent / "missing_secrets.json"))
-    with TestClient(app) as client:
-        return client.get("/")
-
-
-def _get_filtered(db_path, params):
+def _get(db_path, params=None):
     app = create_app(str(db_path), str(db_path.parent / "missing_secrets.json"))
     with TestClient(app) as client:
         return client.get("/", params=params)
@@ -383,7 +377,7 @@ def test_feed_filters_by_channel(tmp_path):
     conn.commit()
     conn.close()
 
-    body = _get_filtered(db_path, {"channel": "chanA"}).text
+    body = _get(db_path, {"channel": "chanA"}).text
     assert "Alpha video" in body
     assert "Beta video" not in body
 
@@ -401,7 +395,7 @@ def test_feed_filters_by_since_date(tmp_path):
     conn.commit()
     conn.close()
 
-    body = _get_filtered(db_path, {"since": "2026-07-10"}).text
+    body = _get(db_path, {"since": "2026-07-10"}).text
     assert "New video" in body
     assert "Old video" not in body
 
@@ -419,7 +413,7 @@ def test_feed_filters_by_until_date(tmp_path):
     conn.commit()
     conn.close()
 
-    body = _get_filtered(db_path, {"until": "2026-07-10"}).text
+    body = _get(db_path, {"until": "2026-07-10"}).text
     assert "Old video" in body
     assert "New video" not in body
 
@@ -434,7 +428,7 @@ def test_until_date_is_inclusive_of_the_whole_day(tmp_path):
     conn.commit()
     conn.close()
 
-    body = _get_filtered(db_path, {"until": "2026-07-10"}).text
+    body = _get(db_path, {"until": "2026-07-10"}).text
     assert "Same day video" in body
 
 
@@ -455,7 +449,7 @@ def test_filters_compose_with_threshold_and_ranking(tmp_path):
     conn.commit()
     conn.close()
 
-    body = _get_filtered(db_path, {"channel": "chanA"}).text
+    body = _get(db_path, {"channel": "chanA"}).text
     assert "Beta other" not in body
 
     feed_section = body.split("Below threshold", 1)[0]
@@ -466,6 +460,19 @@ def test_filters_compose_with_threshold_and_ranking(tmp_path):
 
     below = body.split("Below threshold", 1)[1]
     assert "Alpha low" in below
+
+
+def test_empty_filter_params_return_unfiltered_feed(tmp_path):
+    db_path = _seed_db(tmp_path)
+    conn = connect(str(db_path))
+    channel_id = _channel(conn, "Chan", "chan1")
+    video_id = _video(conn, "vid", channel_id, title="Unfiltered video")
+    _score(conn, video_id, _flat(8.0), overall=8.0)
+    conn.commit()
+    conn.close()
+
+    body = _get(db_path, {"channel": "", "since": "", "until": ""}).text
+    assert "Unfiltered video" in body
 
 
 def test_filter_form_lists_channels(tmp_path):
