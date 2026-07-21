@@ -185,6 +185,110 @@ def remove_topic(conn, topic_id):
     conn.commit()
 
 
+CALIBRATION_FLOOR = 20
+
+DIMENSION_ABBREV = {
+    "info_density": "ID",
+    "originality": "OR",
+    "clickbait_gap": "CB",
+    "padding": "PA",
+    "depth": "DE",
+    "production": "PR",
+}
+
+SELECT_CALIBRATION = """
+SELECT v.yt_video_id, v.title, c.name,
+       s.info_density, s.originality, s.clickbait_gap, s.padding, s.depth,
+       s.production, f.verdict
+FROM videos v
+LEFT JOIN channels c ON c.id = v.channel_id
+JOIN scores s ON s.id = (
+    SELECT id FROM scores WHERE video_id = v.id
+    AND model = ? AND prompt_version = ?
+    ORDER BY scored_at DESC, id DESC LIMIT 1
+)
+JOIN feedback f ON f.id = (
+    SELECT id FROM feedback WHERE video_id = v.id ORDER BY id DESC LIMIT 1
+)
+"""
+
+
+def build_calibration(conn):
+    from winnow.scoring import PROMPT_VERSION, model_name
+
+    weights = load_weights(conn)
+    threshold = load_threshold(conn)
+    model = model_name()
+    great_total = great_agree = 0
+    slop_total = slop_agree = 0
+    disagreements = []
+    for row in conn.execute(SELECT_CALIBRATION, (model, PROMPT_VERSION)).fetchall():
+        yt_id, title, channel, info, orig, click, pad, depth, prod, verdict = row
+        dims = {
+            "info_density": info, "originality": orig, "clickbait_gap": click,
+            "padding": pad, "depth": depth, "production": prod,
+        }
+        score = effective_score(dims, weights)
+        above = score >= threshold
+        if verdict == "great":
+            great_total += 1
+            great_agree += above
+        else:
+            slop_total += 1
+            slop_agree += not above
+        if (verdict == "great") != above:
+            disagreements.append({
+                "detail_url": f"/video/{yt_id}",
+                "title": title,
+                "channel": channel,
+                "verdict": verdict,
+                "score_display": f"{score:.1f}",
+                "distance": abs(score - threshold),
+                "dimensions": [
+                    {"abbr": DIMENSION_ABBREV[d], "label": DIMENSION_LABELS[d],
+                     "score_display": f"{dims[d]:.1f}"}
+                    for d in DIMENSIONS
+                ],
+            })
+    disagreements.sort(key=lambda d: d["distance"])
+    sample_valid = (great_total >= CALIBRATION_FLOOR
+                    and slop_total >= CALIBRATION_FLOOR)
+    provisional = not sample_valid
+    tiles = [
+        _agreement_tile("Greats above threshold", great_agree, great_total,
+                        "great", "above", provisional),
+        _agreement_tile("Slop below threshold", slop_agree, slop_total,
+                        "slop", "below", provisional),
+    ]
+    return {
+        "threshold_display": f"{threshold:.1f}",
+        "model": model,
+        "prompt_version": PROMPT_VERSION,
+        "tiles": tiles,
+        "disagreements": disagreements,
+        "dimension_headers": [
+            {"abbr": DIMENSION_ABBREV[d], "label": DIMENSION_LABELS[d]}
+            for d in DIMENSIONS
+        ],
+        "bar_failed": sample_valid and any(not t["met"] for t in tiles),
+    }
+
+
+def _agreement_tile(label, agree, total, noun, direction, provisional):
+    pct = round(agree / total * 100) if total else None
+    return {
+        "label": label,
+        "pct_display": f"{pct}%" if pct is not None else "—",
+        "count_display": (
+            f"{agree} of {total} {noun} verdicts scored {direction} threshold"),
+        "provisional": provisional,
+        "needed_display": (
+            f"{total} of {CALIBRATION_FLOOR} verdicts needed"
+            if total < CALIBRATION_FLOOR else None),
+        "met": pct is not None and pct >= 80,
+    }
+
+
 def effective_score(dims, weights):
     total = sum(weights.values())
     if not total:

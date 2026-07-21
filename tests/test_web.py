@@ -986,3 +986,246 @@ def test_settings_add_topic_rejects_blank(tmp_path):
     count = conn.execute("SELECT COUNT(*) FROM topics").fetchone()[0]
     conn.close()
     assert count == 0
+
+
+def _get_calibration(db_path):
+    app = create_app(str(db_path), str(db_path.parent / "missing_secrets.json"))
+    with TestClient(app) as client:
+        return client.get("/calibration")
+
+
+def _judged(conn, channel_id, yt_video_id, dims, verdict, *, title="A title",
+            model="gemini-3.1-flash-lite", prompt_version=1):
+    video_id = _video(conn, yt_video_id, channel_id, title=title)
+    conn.execute(
+        "INSERT INTO scores (video_id, overall, info_density, originality, "
+        "clickbait_gap, padding, depth, production, hard_flags, summary, rationale, "
+        "confidence, model, prompt_version, scored_at) "
+        "VALUES (?, 0, ?, ?, ?, ?, ?, ?, '[]', 's', 'r', 1.0, ?, ?, "
+        "'2026-07-20T01:00:00+00:00')",
+        (
+            video_id, dims["info_density"], dims["originality"], dims["clickbait_gap"],
+            dims["padding"], dims["depth"], dims["production"], model, prompt_version,
+        ),
+    )
+    conn.execute(
+        "INSERT INTO feedback (video_id, verdict, created_at) "
+        "VALUES (?, ?, '2026-07-20T02:00:00+00:00')",
+        (video_id, verdict),
+    )
+    return video_id
+
+
+def _seed_verdicts(conn, channel_id, greats, slops, *, great_dims=None,
+                   slop_dims=None):
+    great_dims = great_dims or _flat(8.0)
+    slop_dims = slop_dims or _flat(4.0)
+    for i in range(greats):
+        _judged(conn, channel_id, f"g{i}", great_dims, "great")
+    for i in range(slops):
+        _judged(conn, channel_id, f"s{i}", slop_dims, "slop")
+
+
+def test_calibration_shows_two_agreement_tiles_with_pct_and_counts(tmp_path):
+    db_path = _seed_db(tmp_path)
+    conn = connect(str(db_path))
+    ch = _channel(conn, "Chan", "chan1")
+    _judged(conn, ch, "g1", _flat(8.0), "great")
+    _judged(conn, ch, "g2", _flat(4.0), "great")
+    _judged(conn, ch, "s1", _flat(4.0), "slop")
+    _judged(conn, ch, "s2", _flat(8.0), "slop")
+    conn.commit()
+    conn.close()
+
+    body = _get_calibration(db_path).text
+    assert "Greats above threshold" in body
+    assert "Slop below threshold" in body
+    assert "50%" in body
+    assert "1 of 2" in body
+
+
+def test_calibration_tiles_provisional_below_floor(tmp_path):
+    db_path = _seed_db(tmp_path)
+    conn = connect(str(db_path))
+    ch = _channel(conn, "Chan", "chan1")
+    _seed_verdicts(conn, ch, 5, 5)
+    conn.commit()
+    conn.close()
+
+    body = _get_calibration(db_path).text
+    assert "provisional" in body.lower()
+
+
+def _seeded_calibration(tmp_path, name, greats, slops):
+    root = tmp_path / name
+    root.mkdir()
+    db_path = _seed_db(root)
+    conn = connect(str(db_path))
+    ch = _channel(conn, "Chan", "chan1")
+    _seed_verdicts(conn, ch, greats, slops)
+    conn.commit()
+    conn.close()
+    return _get_calibration(db_path).text
+
+
+def test_calibration_provisional_at_19_but_not_at_20_per_class(tmp_path):
+    assert "provisional" in _seeded_calibration(tmp_path, "a", 19, 20).lower()
+    assert "provisional" in _seeded_calibration(tmp_path, "b", 20, 19).lower()
+    assert "provisional" not in _seeded_calibration(tmp_path, "c", 20, 20).lower()
+
+
+def test_calibration_needed_count_only_on_tiles_below_floor(tmp_path):
+    body = _seeded_calibration(tmp_path, "a", 25, 5)
+    assert "provisional" in body.lower()
+    assert "5 of 20 verdicts needed" in body
+    assert "25 of 20 verdicts needed" not in body
+
+
+def test_calibration_lists_slop_scored_above_threshold_as_disagreement(tmp_path):
+    db_path = _seed_db(tmp_path)
+    conn = connect(str(db_path))
+    ch = _channel(conn, "Chan", "chan1")
+    _judged(conn, ch, "s1", _flat(8.0), "slop", title="Overrated video")
+    _judged(conn, ch, "s2", _flat(4.0), "slop", title="Agreeing video")
+    conn.commit()
+    conn.close()
+
+    body = _get_calibration(db_path).text
+    assert "Overrated video" in body
+    assert "Agreeing video" not in body
+    assert "1 of 2 slop verdicts scored below threshold" in body
+
+
+def test_calibration_disagreement_list_sorted_by_distance_from_threshold(tmp_path):
+    db_path = _seed_db(tmp_path)
+    conn = connect(str(db_path))
+    ch = _channel(conn, "Chan", "chan1")
+    _judged(conn, ch, "far", _flat(3.0), "great", title="Far video")
+    _judged(conn, ch, "near", _flat(5.0), "great", title="Near video")
+    _judged(conn, ch, "mid", _flat(4.0), "great", title="Mid video")
+    conn.commit()
+    conn.close()
+
+    body = _get_calibration(db_path).text
+    assert body.index("Near video") < body.index("Mid video")
+    assert body.index("Mid video") < body.index("Far video")
+
+
+def test_calibration_disagreement_row_shows_all_six_dimension_scores(tmp_path):
+    db_path = _seed_db(tmp_path)
+    conn = connect(str(db_path))
+    ch = _channel(conn, "Chan", "chan1")
+    dims = {
+        "info_density": 9.0, "originality": 1.0, "clickbait_gap": 2.0,
+        "padding": 3.0, "depth": 4.0, "production": 5.0,
+    }
+    _judged(conn, ch, "vid", dims, "great", title="Disagreeing video")
+    conn.commit()
+    conn.close()
+
+    body = _get_calibration(db_path).text
+    row = body.split("Disagreeing video", 1)[1]
+    for value in ("9.0", "1.0", "2.0", "3.0", "4.0", "5.0"):
+        assert value in row
+
+
+def test_calibration_recomputes_agreement_from_current_weights(tmp_path):
+    db_path = _seed_db(tmp_path)
+    conn = connect(str(db_path))
+    ch = _channel(conn, "Chan", "chan1")
+    _judged(conn, ch, "vid", {**_flat(9.0), "padding": 0.0}, "great",
+            title="Weight sensitive")
+    _set_setting(conn, "weights", json.dumps({
+        "info_density": 0.0, "originality": 0.0, "clickbait_gap": 0.0,
+        "padding": 1.0, "depth": 0.0, "production": 0.0,
+    }))
+    _set_setting(conn, "threshold", "6.0")
+    conn.commit()
+    conn.close()
+
+    body = _get_calibration(db_path).text
+    assert "Weight sensitive" in body
+    assert "0 of 1" in body
+
+
+def test_calibration_recomputes_agreement_from_current_threshold(tmp_path):
+    db_path = _seed_db(tmp_path)
+    conn = connect(str(db_path))
+    ch = _channel(conn, "Chan", "chan1")
+    _judged(conn, ch, "vid", _flat(7.0), "great", title="Middling great")
+    _set_setting(conn, "threshold", "8.0")
+    conn.commit()
+    conn.close()
+
+    body = _get_calibration(db_path).text
+    assert "Middling great" in body
+    assert "0 of 1" in body
+
+
+def test_calibration_scoped_to_current_model_and_prompt_version(tmp_path):
+    db_path = _seed_db(tmp_path)
+    conn = connect(str(db_path))
+    ch = _channel(conn, "Chan", "chan1")
+    _judged(conn, ch, "cur", _flat(8.0), "great", title="Current scope")
+    _judged(conn, ch, "othermodel", _flat(4.0), "great", title="Other model",
+            model="other-model")
+    _judged(conn, ch, "oldprompt", _flat(8.0), "slop", title="Old prompt",
+            prompt_version=2)
+    conn.commit()
+    conn.close()
+
+    body = _get_calibration(db_path).text
+    assert "Other model" not in body
+    assert "Old prompt" not in body
+    assert "1 of 1" in body
+
+
+def test_calibration_bar_failed_indicator_with_valid_sample(tmp_path):
+    db_path = _seed_db(tmp_path)
+    conn = connect(str(db_path))
+    ch = _channel(conn, "Chan", "chan1")
+    _seed_verdicts(conn, ch, 20, 20, great_dims=_flat(4.0), slop_dims=_flat(4.0))
+    conn.commit()
+    conn.close()
+
+    body = _get_calibration(db_path).text
+    assert "provisional" not in body.lower()
+    assert "agreement bar has failed" in body.lower()
+
+
+def test_calibration_no_bar_indicator_when_sample_is_provisional(tmp_path):
+    db_path = _seed_db(tmp_path)
+    conn = connect(str(db_path))
+    ch = _channel(conn, "Chan", "chan1")
+    _seed_verdicts(conn, ch, 5, 5, great_dims=_flat(4.0), slop_dims=_flat(4.0))
+    conn.commit()
+    conn.close()
+
+    body = _get_calibration(db_path).text
+    assert "agreement bar has failed" not in body.lower()
+
+
+def test_calibration_no_disagreements_when_scores_align(tmp_path):
+    db_path = _seed_db(tmp_path)
+    conn = connect(str(db_path))
+    ch = _channel(conn, "Chan", "chan1")
+    _judged(conn, ch, "g1", _flat(8.0), "great")
+    _judged(conn, ch, "s1", _flat(4.0), "slop")
+    conn.commit()
+    conn.close()
+
+    body = _get_calibration(db_path).text
+    assert "No disagreements" in body
+
+
+def test_calibration_scopes_to_current_model_and_prompt_in_footer(tmp_path):
+    db_path = _seed_db(tmp_path)
+    body = _get_calibration(db_path).text
+    assert "gemini-3.1-flash-lite" in body
+    assert "prompt v1" in body
+
+
+def test_feed_links_to_calibration(tmp_path):
+    db_path = _seed_db(tmp_path)
+    body = _get(db_path).text
+    assert 'href="/calibration"' in body
