@@ -86,6 +86,17 @@ def test_transcript_status_rejects_unknown_value(conn):
         )
 
 
+def test_init_adds_topic_id_to_a_pre_topic_videos_table(conn):
+    conn.execute(
+        "CREATE TABLE videos (id INTEGER PRIMARY KEY, "
+        "yt_video_id TEXT NOT NULL UNIQUE, channel_id INTEGER)"
+    )
+    init_db(conn)
+    assert "topic_id" in column_names(conn, "videos")
+    conn.execute("INSERT INTO topics (query) VALUES ('solar')")
+    conn.execute("INSERT INTO videos (yt_video_id, topic_id) VALUES ('v1', 1)")
+
+
 def test_init_twice_is_a_noop(conn):
     init_db(conn)
     conn.execute(

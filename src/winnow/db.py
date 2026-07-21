@@ -89,4 +89,12 @@ def connect(path):
 
 def init_db(conn):
     conn.executescript(SCHEMA)
+    if "topic_id" not in _columns(conn, "videos"):
+        conn.execute(
+            "ALTER TABLE videos ADD COLUMN topic_id INTEGER REFERENCES topics(id)"
+        )
     conn.commit()
+
+
+def _columns(conn, table):
+    return {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}

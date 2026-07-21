@@ -330,8 +330,8 @@ def build_feed(conn, channel=None, topic=None, since=None, until=None):
             for cid, name in conn.execute(SELECT_CHANNELS).fetchall()
         ],
         "topics": [
-            {"id": tid, "query": query}
-            for tid, query in conn.execute(SELECT_ACTIVE_TOPICS).fetchall()
+            {"id": tid, "query": topic_query}
+            for tid, topic_query in conn.execute(SELECT_ACTIVE_TOPICS).fetchall()
         ],
         "filters": {
             "channel": channel, "topic": topic, "since": since, "until": until,
