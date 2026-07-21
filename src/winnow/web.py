@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Literal
 
-from fastapi import FastAPI, Form, HTTPException, Request
+from fastapi import FastAPI, Form, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -12,11 +12,16 @@ from fastapi.templating import Jinja2Templates
 from winnow import auth
 from winnow.db import connect
 from winnow.feed import (
+    add_channel,
+    add_topic,
     build_detail,
     build_feed,
     build_settings,
     record_verdict,
+    remove_channel,
+    remove_topic,
     save_settings,
+    set_channel_flags,
 )
 from winnow.scheduler import due_check_loop, tick
 from winnow.youtube import build_client
@@ -116,6 +121,58 @@ def create_app(db_path, client_secrets_path):
         conn = connect(db_path)
         try:
             save_settings(conn, threshold, {k: v / 100 for k, v in weights.items()})
+        finally:
+            conn.close()
+        return RedirectResponse("/settings", status_code=303)
+
+    @app.post("/settings/channels")
+    def add_manual_channel(yt_channel_id: str = Form(...)):
+        identifier = yt_channel_id.strip()
+        if not identifier:
+            raise HTTPException(status_code=422)
+        conn = connect(db_path)
+        try:
+            add_channel(conn, identifier)
+        finally:
+            conn.close()
+        return RedirectResponse("/settings", status_code=303)
+
+    @app.post("/settings/channels/{yt_channel_id}")
+    def update_channel(yt_channel_id: str, excluded: bool = Form(False),
+                       exempt: bool = Form(False)):
+        conn = connect(db_path)
+        try:
+            set_channel_flags(conn, yt_channel_id, excluded, exempt)
+        finally:
+            conn.close()
+        return Response(status_code=204)
+
+    @app.post("/settings/channels/{yt_channel_id}/remove")
+    def deactivate_channel(yt_channel_id: str):
+        conn = connect(db_path)
+        try:
+            remove_channel(conn, yt_channel_id)
+        finally:
+            conn.close()
+        return RedirectResponse("/settings", status_code=303)
+
+    @app.post("/settings/topics")
+    def add_query_topic(query: str = Form(...)):
+        text = query.strip()
+        if not text:
+            raise HTTPException(status_code=422)
+        conn = connect(db_path)
+        try:
+            add_topic(conn, text)
+        finally:
+            conn.close()
+        return RedirectResponse("/settings", status_code=303)
+
+    @app.post("/settings/topics/{topic_id}/remove")
+    def deactivate_topic(topic_id: int):
+        conn = connect(db_path)
+        try:
+            remove_topic(conn, topic_id)
         finally:
             conn.close()
         return RedirectResponse("/settings", status_code=303)

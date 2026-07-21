@@ -53,6 +53,77 @@
   color: var(--pico-background-color);
 }
 
+.channel-row {
+  display: grid;
+  grid-template-columns: 1fr 120px 90px 160px 100px;
+  gap: 1rem;
+  align-items: center;
+  padding: 0.5rem 0;
+  border-bottom: 1px solid var(--pico-muted-border-color);
+}
+
+.channel-head {
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--pico-muted-color);
+}
+
+.channel-flags {
+  grid-column: 3 / 5;
+  display: flex;
+  gap: 4.5rem;
+  margin: 0;
+}
+
+.channel-flags label,
+.channel-row form {
+  margin: 0;
+}
+
+.topic-row {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  max-width: 420px;
+  padding: 0.5rem 0;
+  border-bottom: 1px solid var(--pico-muted-border-color);
+}
+
+.topic-row span {
+  flex: 1;
+}
+
+.add-source {
+  display: flex;
+  gap: 0.5rem;
+  align-items: start;
+  max-width: 480px;
+}
+
+.add-source input {
+  margin: 0;
+}
+
+.add-source button,
+.channel-row button,
+.topic-row button {
+  width: auto;
+  margin: 0;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 @media (max-width: 576px) {
   .feed-card {
     grid-template-columns: 1fr;
