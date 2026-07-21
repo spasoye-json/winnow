@@ -1,15 +1,23 @@
 import asyncio
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
 
 from winnow import auth
 from winnow.db import connect
+from winnow.feed import build_feed
 from winnow.scheduler import due_check_loop, tick
 from winnow.youtube import build_client
 
 logger = logging.getLogger("winnow.scheduler")
+
+BASE_DIR = Path(__file__).resolve().parent
+templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
 
 def run_due_check(db_path, client_secrets_path):
@@ -54,9 +62,20 @@ def create_app(db_path, client_secrets_path):
             await loop
 
     app = FastAPI(lifespan=lifespan)
+    app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")),
+              name="static")
 
     @app.get("/health")
     def health():
         return {"status": "ok"}
+
+    @app.get("/", response_class=HTMLResponse)
+    def feed(request: Request):
+        conn = connect(db_path)
+        try:
+            context = build_feed(conn)
+        finally:
+            conn.close()
+        return templates.TemplateResponse(request, "feed.html", context)
 
     return app

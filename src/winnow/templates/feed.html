@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+
+{% macro thumbnail(card) %}
+<a href="{{ card.youtube_url }}">
+  {% if card.thumbnail_url %}
+  <img src="{{ card.thumbnail_url }}" alt="Thumbnail for {{ card.title }}" />
+  {% endif %}
+</a>
+{% endmacro %}
+
+{% macro scored_card(card) %}
+<article class="feed-card">
+  {{ thumbnail(card) }}
+  <div>
+    <span class="score-badge">{{ card.score_display }}</span>
+    {% if card.metadata_only %}<span class="marker">🛈 metadata-only</span>{% endif %}
+    {% for flag in card.hard_flags %}<span class="marker">⚑ {{ flag }}</span>{% endfor %}
+    <h3><a href="{{ card.youtube_url }}">{{ card.title }}</a></h3>
+    {% if card.channel %}<p>{{ card.channel }}</p>{% endif %}
+    <p>{{ card.summary }}</p>
+    <a href="{{ card.youtube_url }}" role="button">Watch on YouTube</a>
+  </div>
+</article>
+{% endmacro %}
+
+{% macro unscored_card(card) %}
+<article class="feed-card">
+  {{ thumbnail(card) }}
+  <div>
+    <span class="marker">{{ card.reason }}</span>
+    <h3><a href="{{ card.youtube_url }}">{{ card.title }}</a></h3>
+    {% if card.channel %}<p>{{ card.channel }}</p>{% endif %}
+    <a href="{{ card.youtube_url }}" role="button">Watch on YouTube</a>
+  </div>
+</article>
+{% endmacro %}
+
+{% block content %}
+<header>
+  <h1>Winnow</h1>
+  <p>Videos above threshold {{ "%.1f"|format(threshold) }}, ranked by quality.</p>
+</header>
+
+<aside>
+  <p>
+    <strong>Genre bias:</strong> scores read the transcript, so visual-first genres
+    such as art, music, and gameplay are penalized. This is a known limitation of the
+    MVP.
+  </p>
+</aside>
+
+{% if feed %}
+<section>
+  <h2>Feed</h2>
+  {% for card in feed %}{{ scored_card(card) }}{% endfor %}
+</section>
+{% else %}
+<section>
+  <h2>Feed</h2>
+  <p>Nothing above threshold yet.</p>
+</section>
+{% endif %}
+
+{% if below %}
+<section>
+  <h2>Below threshold</h2>
+  {% for card in below %}{{ scored_card(card) }}{% endfor %}
+</section>
+{% endif %}
+
+{% if flagged %}
+<section>
+  <h2>Hard-flagged</h2>
+  <p>Excluded from the feed regardless of score.</p>
+  {% for card in flagged %}{{ scored_card(card) }}{% endfor %}
+</section>
+{% endif %}
+
+{% if unscored %}
+<section>
+  <h2>Unscored</h2>
+  {% for card in unscored %}{{ unscored_card(card) }}{% endfor %}
+</section>
+{% endif %}
+{% endblock %}
