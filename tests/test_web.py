@@ -781,3 +781,208 @@ def test_feed_links_to_settings(tmp_path):
     db_path = _seed_db(tmp_path)
     body = _get(db_path).text
     assert 'href="/settings"' in body
+
+
+def _settings_channel(conn, name, yt_channel_id, *, source="subscription",
+                      excluded=0, exempt=0, active=1):
+    conn.execute(
+        "INSERT INTO channels (yt_channel_id, name, source, excluded, "
+        "exempt_low_transcript, active, added_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, '2026-01-01T00:00:00+00:00')",
+        (yt_channel_id, name, source, excluded, exempt, active),
+    )
+    conn.commit()
+
+
+def _post(db_path, path, data=None):
+    app = create_app(str(db_path), str(db_path.parent / "missing_secrets.json"))
+    with TestClient(app) as client:
+        return client.post(path, data=data or {})
+
+
+def test_settings_lists_channels_with_excluded_and_exempt_checkboxes(tmp_path):
+    db_path = _seed_db(tmp_path)
+    conn = connect(str(db_path))
+    _settings_channel(conn, "Deep Dives", "chan1")
+    conn.close()
+
+    body = _get_settings(db_path).text
+    assert "Deep Dives" in body
+    assert "Excluded" in body
+    assert "Exempt" in body
+    assert 'name="excluded"' in body
+    assert 'name="exempt"' in body
+
+
+def test_settings_toggles_channel_excluded_and_exempt(tmp_path):
+    db_path = _seed_db(tmp_path)
+    conn = connect(str(db_path))
+    _settings_channel(conn, "Chan", "chan1")
+    conn.close()
+
+    _post(db_path, "/settings/channels/chan1", {"excluded": "1", "exempt": "1"})
+    conn = connect(str(db_path))
+    row = conn.execute(
+        "SELECT excluded, exempt_low_transcript FROM channels "
+        "WHERE yt_channel_id = 'chan1'").fetchone()
+    conn.close()
+    assert row == (1, 1)
+
+    _post(db_path, "/settings/channels/chan1", {})
+    conn = connect(str(db_path))
+    row = conn.execute(
+        "SELECT excluded, exempt_low_transcript FROM channels "
+        "WHERE yt_channel_id = 'chan1'").fetchone()
+    conn.close()
+    assert row == (0, 0)
+
+
+def test_settings_adds_manual_channel(tmp_path):
+    db_path = _seed_db(tmp_path)
+
+    _post(db_path, "/settings/channels", {"yt_channel_id": "UCnew"})
+
+    conn = connect(str(db_path))
+    row = conn.execute(
+        "SELECT source, active, excluded FROM channels "
+        "WHERE yt_channel_id = 'UCnew'").fetchone()
+    conn.close()
+    assert row == ("manual", 1, 0)
+
+    body = _get_settings(db_path).text
+    assert "UCnew" in body
+
+
+def test_settings_adding_lapsed_subscription_makes_it_manual(tmp_path):
+    db_path = _seed_db(tmp_path)
+    conn = connect(str(db_path))
+    _settings_channel(conn, "Lapsed", "UClapsed", source="subscription", active=0)
+    conn.close()
+
+    _post(db_path, "/settings/channels", {"yt_channel_id": "UClapsed"})
+
+    conn = connect(str(db_path))
+    row = conn.execute(
+        "SELECT source, active FROM channels "
+        "WHERE yt_channel_id = 'UClapsed'").fetchone()
+    conn.close()
+    assert row == ("manual", 1)
+
+
+def test_settings_adding_active_subscription_keeps_its_source(tmp_path):
+    db_path = _seed_db(tmp_path)
+    conn = connect(str(db_path))
+    _settings_channel(conn, "Subbed", "UCsub", source="subscription")
+    conn.close()
+
+    _post(db_path, "/settings/channels", {"yt_channel_id": "UCsub"})
+
+    conn = connect(str(db_path))
+    row = conn.execute(
+        "SELECT source, active FROM channels "
+        "WHERE yt_channel_id = 'UCsub'").fetchone()
+    conn.close()
+    assert row == ("subscription", 1)
+
+
+def test_settings_removing_channel_deactivates_not_deletes(tmp_path):
+    db_path = _seed_db(tmp_path)
+    conn = connect(str(db_path))
+    _settings_channel(conn, "Manual One", "UCman", source="manual")
+    conn.close()
+
+    _post(db_path, "/settings/channels/UCman/remove")
+
+    conn = connect(str(db_path))
+    row = conn.execute(
+        "SELECT active FROM channels WHERE yt_channel_id = 'UCman'").fetchone()
+    conn.close()
+    assert row == (0,)
+
+    body = _get_settings(db_path).text
+    assert "Manual One" not in body
+
+
+def test_settings_removing_subscription_channel_leaves_it_active(tmp_path):
+    db_path = _seed_db(tmp_path)
+    conn = connect(str(db_path))
+    _settings_channel(conn, "Subbed", "UCsub", source="subscription")
+    conn.close()
+
+    _post(db_path, "/settings/channels/UCsub/remove")
+
+    conn = connect(str(db_path))
+    row = conn.execute(
+        "SELECT active FROM channels WHERE yt_channel_id = 'UCsub'").fetchone()
+    conn.close()
+    assert row == (1,)
+
+
+def test_settings_only_manual_channels_are_removable(tmp_path):
+    db_path = _seed_db(tmp_path)
+    conn = connect(str(db_path))
+    _settings_channel(conn, "Subbed", "UCsub", source="subscription")
+    _settings_channel(conn, "Manual One", "UCman", source="manual")
+    conn.close()
+
+    body = _get_settings(db_path).text
+    assert "/settings/channels/UCman/remove" in body
+    assert "/settings/channels/UCsub/remove" not in body
+
+
+def test_settings_add_channel_rejects_blank(tmp_path):
+    db_path = _seed_db(tmp_path)
+
+    response = _post(db_path, "/settings/channels", {"yt_channel_id": "   "})
+    assert response.status_code == 422
+
+    conn = connect(str(db_path))
+    count = conn.execute("SELECT COUNT(*) FROM channels").fetchone()[0]
+    conn.close()
+    assert count == 0
+
+
+def test_settings_adds_topic(tmp_path):
+    db_path = _seed_db(tmp_path)
+
+    _post(db_path, "/settings/topics", {"query": "energy storage"})
+
+    conn = connect(str(db_path))
+    rows = conn.execute("SELECT query, active FROM topics").fetchall()
+    conn.close()
+    assert rows == [("energy storage", 1)]
+
+    body = _get_settings(db_path).text
+    assert "energy storage" in body
+
+
+def test_settings_removing_topic_deactivates(tmp_path):
+    db_path = _seed_db(tmp_path)
+    conn = connect(str(db_path))
+    cur = conn.execute("INSERT INTO topics (query, active) VALUES ('gone', 1)")
+    topic_id = cur.lastrowid
+    conn.commit()
+    conn.close()
+
+    _post(db_path, f"/settings/topics/{topic_id}/remove")
+
+    conn = connect(str(db_path))
+    row = conn.execute(
+        "SELECT active FROM topics WHERE id = ?", (topic_id,)).fetchone()
+    conn.close()
+    assert row == (0,)
+
+    body = _get_settings(db_path).text
+    assert "gone" not in body
+
+
+def test_settings_add_topic_rejects_blank(tmp_path):
+    db_path = _seed_db(tmp_path)
+
+    response = _post(db_path, "/settings/topics", {"query": "  "})
+    assert response.status_code == 422
+
+    conn = connect(str(db_path))
+    count = conn.execute("SELECT COUNT(*) FROM topics").fetchone()[0]
+    conn.close()
+    assert count == 0

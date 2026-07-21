@@ -97,6 +97,15 @@ def _set_setting(conn, key, value):
     )
 
 
+SELECT_SETTINGS_CHANNELS = """
+SELECT yt_channel_id, name, source, excluded, exempt_low_transcript
+FROM channels WHERE active = 1
+ORDER BY source, LOWER(COALESCE(name, yt_channel_id))
+"""
+
+SELECT_ACTIVE_TOPICS = "SELECT id, query FROM topics WHERE active = 1 ORDER BY id"
+
+
 def build_settings(conn):
     weights = load_weights(conn)
     threshold = load_threshold(conn)
@@ -110,7 +119,70 @@ def build_settings(conn):
             }
             for d in DIMENSIONS
         ],
+        "channels": [
+            {
+                "yt_channel_id": cid,
+                "name": name or cid,
+                "source": source,
+                "excluded": bool(excluded),
+                "exempt": bool(exempt),
+                "removable": source == "manual",
+                "toggle_url": f"/settings/channels/{cid}",
+                "remove_url": f"/settings/channels/{cid}/remove",
+            }
+            for cid, name, source, excluded, exempt
+            in conn.execute(SELECT_SETTINGS_CHANNELS).fetchall()
+        ],
+        "topics": [
+            {"id": tid, "query": query, "remove_url": f"/settings/topics/{tid}/remove"}
+            for tid, query in conn.execute(SELECT_ACTIVE_TOPICS).fetchall()
+        ],
     }
+
+
+def set_channel_flags(conn, yt_channel_id, excluded, exempt):
+    conn.execute(
+        "UPDATE channels SET excluded = ?, exempt_low_transcript = ? "
+        "WHERE yt_channel_id = ?",
+        (int(excluded), int(exempt), yt_channel_id),
+    )
+    conn.commit()
+
+
+def add_channel(conn, yt_channel_id, now=None):
+    now = now or datetime.now(UTC).isoformat()
+    conn.execute(
+        "INSERT INTO channels (yt_channel_id, source, active, added_at) "
+        "VALUES (?, 'manual', 1, ?) "
+        "ON CONFLICT(yt_channel_id) DO UPDATE SET active = 1, "
+        "source = CASE WHEN channels.active = 0 THEN 'manual' "
+        "ELSE channels.source END",
+        (yt_channel_id, now),
+    )
+    conn.commit()
+
+
+def remove_channel(conn, yt_channel_id):
+    conn.execute(
+        "UPDATE channels SET active = 0 "
+        "WHERE yt_channel_id = ? AND source = 'manual'",
+        (yt_channel_id,),
+    )
+    conn.commit()
+
+
+def add_topic(conn, query, now=None):
+    now = now or datetime.now(UTC).isoformat()
+    conn.execute(
+        "INSERT INTO topics (query, added_at, active) VALUES (?, ?, 1)",
+        (query, now),
+    )
+    conn.commit()
+
+
+def remove_topic(conn, topic_id):
+    conn.execute("UPDATE topics SET active = 0 WHERE id = ?", (topic_id,))
+    conn.commit()
 
 
 def effective_score(dims, weights):

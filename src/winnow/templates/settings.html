@@ -8,6 +8,68 @@
   <p>Tune what "good" means. Changes re-rank the feed instantly, no re-scoring.</p>
 </header>
 
+<h2>Channels</h2>
+<p>Excluding hides a channel from the feed without unsubscribing on YouTube.</p>
+
+<form method="post" action="/settings/channels" class="add-source">
+  <input type="text" name="yt_channel_id" placeholder="YouTube channel ID"
+         aria-label="Channel ID" required />
+  <button type="submit">Add channel</button>
+</form>
+
+<div class="channel-list">
+  <div class="channel-row channel-head">
+    <span>Channel</span>
+    <span>Source</span>
+    <span>Excluded</span>
+    <span>Exempt low-transcript</span>
+    <span></span>
+  </div>
+  {% for c in channels %}
+  <div class="channel-row">
+    <span>{{ c.name }}</span>
+    <span>{{ c.source }}</span>
+    <form hx-post="{{ c.toggle_url }}" hx-trigger="change" hx-swap="none"
+          class="channel-flags">
+      <label>
+        <input type="checkbox" name="excluded" value="1"
+               {% if c.excluded %}checked{% endif %} />
+        <span class="sr-only">Excluded</span>
+      </label>
+      <label>
+        <input type="checkbox" name="exempt" value="1"
+               {% if c.exempt %}checked{% endif %} />
+        <span class="sr-only">Exempt low-transcript</span>
+      </label>
+    </form>
+    {% if c.removable %}
+    <form method="post" action="{{ c.remove_url }}">
+      <button type="submit" class="secondary">Remove</button>
+    </form>
+    {% else %}
+    <span></span>
+    {% endif %}
+  </div>
+  {% endfor %}
+</div>
+
+<h2>Topics</h2>
+<div class="topic-list">
+  {% for t in topics %}
+  <div class="topic-row">
+    <span>{{ t.query }}</span>
+    <form method="post" action="{{ t.remove_url }}">
+      <button type="submit" class="secondary" title="Remove">Remove</button>
+    </form>
+  </div>
+  {% endfor %}
+</div>
+<form method="post" action="/settings/topics" class="add-source">
+  <input type="text" name="query" placeholder="Topic search query"
+         aria-label="Topic search query" required />
+  <button type="submit">Add topic</button>
+</form>
+
 <form method="post" action="/settings">
   <h2>Scoring</h2>
   <label>
