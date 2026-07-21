@@ -1,4 +1,5 @@
 import json
+from datetime import UTC, datetime
 
 DEFAULT_WEIGHTS = {
     "info_density": 0.25,
@@ -30,10 +31,14 @@ UNSCORED_REASONS = {
     "fetch_failed": "transcript fetch failed",
 }
 
-SELECT_VIDEOS = """
+VERDICT_COLUMN = """
+       (SELECT verdict FROM feedback WHERE video_id = v.id
+        ORDER BY id DESC LIMIT 1) AS verdict"""
+
+SELECT_VIDEOS = f"""
 SELECT v.yt_video_id, v.title, v.thumbnail_url, v.transcript_status, c.name,
        s.info_density, s.originality, s.clickbait_gap, s.padding, s.depth,
-       s.production, s.summary, s.hard_flags, s.confidence
+       s.production, s.summary, s.hard_flags, s.confidence,{VERDICT_COLUMN}
 FROM videos v
 LEFT JOIN channels c ON c.id = v.channel_id
 LEFT JOIN scores s ON s.id = (
@@ -48,11 +53,11 @@ SELECT_CHANNELS = """
 SELECT yt_channel_id, name FROM channels WHERE name IS NOT NULL ORDER BY name
 """
 
-SELECT_VIDEO = """
+SELECT_VIDEO = f"""
 SELECT v.yt_video_id, v.title, v.thumbnail_url, v.transcript_status, c.name,
        s.info_density, s.originality, s.clickbait_gap, s.padding, s.depth,
        s.production, s.summary, s.rationale, s.hard_flags, s.confidence,
-       s.model, s.prompt_version
+       s.model, s.prompt_version,{VERDICT_COLUMN}
 FROM videos v
 LEFT JOIN channels c ON c.id = v.channel_id
 LEFT JOIN scores s ON s.id = (
@@ -91,13 +96,16 @@ def build_feed(conn, channel=None, since=None, until=None):
     query, params = _filtered_query(channel, since, until)
     feed, below, flagged, unscored = [], [], [], []
     for row in conn.execute(query, params).fetchall():
-        (yt_id, title, thumbnail, status, channel_name, *score_cols) = row
+        (yt_id, title, thumbnail, status, channel_name, *rest) = row
+        verdict = rest[-1]
+        score_cols = rest[:-1]
         info = score_cols[0]
         if info is None:
             unscored.append(
                 _unscored_card(yt_id, title, thumbnail, channel_name, status))
             continue
-        card = _scored_card(yt_id, title, thumbnail, channel_name, score_cols, weights)
+        card = _scored_card(yt_id, title, thumbnail, channel_name, score_cols,
+                            weights, verdict)
         if card["hard_flags"]:
             flagged.append(card)
         elif card["score"] >= threshold:
@@ -138,7 +146,7 @@ def _filtered_query(channel, since, until):
     return query + SELECT_VIDEOS_ORDER, params
 
 
-def _scored_card(yt_id, title, thumbnail, channel, score_cols, weights):
+def _scored_card(yt_id, title, thumbnail, channel, score_cols, weights, verdict):
     (info, orig, click, pad, depth, prod, summary, flags_json, conf) = score_cols
     dims = {
         "info_density": info, "originality": orig, "clickbait_gap": click,
@@ -148,6 +156,8 @@ def _scored_card(yt_id, title, thumbnail, channel, score_cols, weights):
     return {
         "youtube_url": YOUTUBE_WATCH_URL + yt_id,
         "detail_url": f"/video/{yt_id}",
+        "verdict_url": f"/video/{yt_id}/verdict",
+        "verdict": verdict,
         "title": title,
         "thumbnail_url": thumbnail,
         "channel": channel,
@@ -175,7 +185,8 @@ def build_detail(conn, yt_video_id):
     if row is None:
         return None
     (yt_id, title, thumbnail, status, channel, info, orig, click, pad, depth,
-     prod, summary, rationale, flags_json, conf, model, prompt_version) = row
+     prod, summary, rationale, flags_json, conf, model, prompt_version,
+     verdict) = row
     detail = {
         "youtube_url": YOUTUBE_WATCH_URL + yt_id,
         "title": title,
@@ -209,5 +220,29 @@ def build_detail(conn, yt_video_id):
         "model": model,
         "prompt_version": prompt_version,
         "metadata_only": conf is not None and conf < FULL_CONFIDENCE,
+        "verdict_url": f"/video/{yt_id}/verdict",
+        "verdict": verdict,
     })
     return detail
+
+
+def record_verdict(conn, yt_video_id, verdict, now=None):
+    row = conn.execute(
+        "SELECT id FROM videos WHERE yt_video_id = ?", (yt_video_id,)
+    ).fetchone()
+    if row is None:
+        raise LookupError(yt_video_id)
+    video_id = row[0]
+    current = conn.execute(
+        "SELECT verdict FROM feedback WHERE video_id = ? ORDER BY id DESC LIMIT 1",
+        (video_id,),
+    ).fetchone()
+    conn.execute("DELETE FROM feedback WHERE video_id = ?", (video_id,))
+    new = None if current and current[0] == verdict else verdict
+    if new is not None:
+        conn.execute(
+            "INSERT INTO feedback (video_id, verdict, created_at) VALUES (?, ?, ?)",
+            (video_id, new, now or datetime.now(UTC).isoformat()),
+        )
+    conn.commit()
+    return new

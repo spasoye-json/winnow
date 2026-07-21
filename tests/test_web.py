@@ -88,6 +88,12 @@ def _get_detail(db_path, yt_video_id):
         return client.get(f"/video/{yt_video_id}")
 
 
+def _post_verdict(db_path, yt_video_id, verdict):
+    app = create_app(str(db_path), str(db_path.parent / "missing_secrets.json"))
+    with TestClient(app) as client:
+        return client.post(f"/video/{yt_video_id}/verdict", data={"verdict": verdict})
+
+
 def test_feed_card_shows_all_fields(tmp_path):
     db_path = _seed_db(tmp_path)
     conn = connect(str(db_path))
@@ -491,6 +497,152 @@ def test_filter_form_lists_channels(tmp_path):
     assert 'name="until"' in body
     assert 'value="chanA"' in body
     assert 'value="chanB"' in body
+
+
+def test_htmx_vendored_as_static_file(tmp_path):
+    db_path = _seed_db(tmp_path)
+    body = _get(db_path).text
+    assert "/static/htmx" in body
+
+    app = create_app(str(db_path), str(db_path.parent / "missing_secrets.json"))
+    with TestClient(app) as client:
+        response = client.get("/static/htmx.min.js")
+    assert response.status_code == 200
+    assert "htmx" in response.text
+
+
+def test_feed_card_shows_verdict_buttons(tmp_path):
+    db_path = _seed_db(tmp_path)
+    conn = connect(str(db_path))
+    channel_id = _channel(conn, "Chan", "chan1")
+    video_id = _video(conn, "vid123", channel_id, title="Judged video")
+    _score(conn, video_id, _flat(8.0), overall=8.0)
+    conn.commit()
+    conn.close()
+
+    body = _get(db_path).text
+    assert "Great" in body
+    assert "Slop" in body
+    assert 'hx-post="/video/vid123/verdict"' in body
+
+
+def test_post_verdict_returns_button_state_snippet(tmp_path):
+    db_path = _seed_db(tmp_path)
+    conn = connect(str(db_path))
+    channel_id = _channel(conn, "Chan", "chan1")
+    video_id = _video(conn, "vid123", channel_id, title="Judged video")
+    _score(conn, video_id, _flat(8.0), overall=8.0)
+    conn.commit()
+    conn.close()
+
+    response = _post_verdict(db_path, "vid123", "great")
+    body = response.text
+
+    assert response.status_code == 200
+    assert 'hx-post="/video/vid123/verdict"' in body
+    assert 'value="great"' in body
+    assert 'value="slop"' in body
+    assert 'aria-pressed="true"' in body
+    assert "<html" not in body.lower()
+
+
+def test_verdict_persists_and_shows_on_feed(tmp_path):
+    db_path = _seed_db(tmp_path)
+    conn = connect(str(db_path))
+    channel_id = _channel(conn, "Chan", "chan1")
+    video_id = _video(conn, "vid123", channel_id, title="Judged video")
+    _score(conn, video_id, _flat(8.0), overall=8.0)
+    conn.commit()
+    conn.close()
+
+    _post_verdict(db_path, "vid123", "great")
+
+    conn = connect(str(db_path))
+    rows = conn.execute(
+        "SELECT verdict FROM feedback WHERE video_id = ?", (video_id,)
+    ).fetchall()
+    conn.close()
+    assert rows == [("great",)]
+
+    body = _get(db_path).text
+    great_button = body.split('value="great"', 1)[1].split(">", 1)[0]
+    assert 'aria-pressed="true"' in great_button
+
+
+def test_verdict_is_one_per_video_and_replaceable(tmp_path):
+    db_path = _seed_db(tmp_path)
+    conn = connect(str(db_path))
+    channel_id = _channel(conn, "Chan", "chan1")
+    video_id = _video(conn, "vid123", channel_id, title="Judged video")
+    _score(conn, video_id, _flat(8.0), overall=8.0)
+    conn.commit()
+    conn.close()
+
+    _post_verdict(db_path, "vid123", "great")
+    response = _post_verdict(db_path, "vid123", "slop")
+
+    conn = connect(str(db_path))
+    rows = conn.execute(
+        "SELECT verdict FROM feedback WHERE video_id = ?", (video_id,)
+    ).fetchall()
+    conn.close()
+    assert rows == [("slop",)]
+
+    slop_button = response.text.split('value="slop"', 1)[1].split(">", 1)[0]
+    assert 'aria-pressed="true"' in slop_button
+
+
+def test_reposting_same_verdict_clears_it(tmp_path):
+    db_path = _seed_db(tmp_path)
+    conn = connect(str(db_path))
+    channel_id = _channel(conn, "Chan", "chan1")
+    video_id = _video(conn, "vid123", channel_id, title="Judged video")
+    _score(conn, video_id, _flat(8.0), overall=8.0)
+    conn.commit()
+    conn.close()
+
+    _post_verdict(db_path, "vid123", "great")
+    response = _post_verdict(db_path, "vid123", "great")
+
+    conn = connect(str(db_path))
+    rows = conn.execute(
+        "SELECT verdict FROM feedback WHERE video_id = ?", (video_id,)
+    ).fetchall()
+    conn.close()
+    assert rows == []
+    assert 'aria-pressed="true"' not in response.text
+
+
+def test_post_verdict_unknown_video_is_404(tmp_path):
+    db_path = _seed_db(tmp_path)
+    response = _post_verdict(db_path, "nope", "great")
+    assert response.status_code == 404
+
+
+def test_post_invalid_verdict_is_rejected(tmp_path):
+    db_path = _seed_db(tmp_path)
+    conn = connect(str(db_path))
+    channel_id = _channel(conn, "Chan", "chan1")
+    video_id = _video(conn, "vid123", channel_id, title="Judged video")
+    _score(conn, video_id, _flat(8.0), overall=8.0)
+    conn.commit()
+    conn.close()
+
+    response = _post_verdict(db_path, "vid123", "meh")
+    assert response.status_code == 422
+
+
+def test_detail_shows_verdict_buttons(tmp_path):
+    db_path = _seed_db(tmp_path)
+    conn = connect(str(db_path))
+    channel_id = _channel(conn, "Chan", "chan1")
+    video_id = _video(conn, "vid123", channel_id, title="Judged video")
+    _score(conn, video_id, _flat(8.0), overall=8.0)
+    conn.commit()
+    conn.close()
+
+    body = _get_detail(db_path, "vid123").text
+    assert 'hx-post="/video/vid123/verdict"' in body
 
 
 def test_no_cdn_assets(tmp_path):

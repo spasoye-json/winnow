@@ -27,6 +27,32 @@
   vertical-align: middle;
 }
 
+.verdict {
+  display: flex;
+  gap: 0.5rem;
+  margin: 0;
+}
+
+.verdict button {
+  width: auto;
+  padding: 0.25rem 0.9rem;
+  background: transparent;
+  border-color: var(--pico-muted-border-color);
+  color: var(--pico-color);
+}
+
+.verdict button[aria-pressed="true"].verdict-great {
+  background: var(--pico-primary-background);
+  border-color: var(--pico-primary-background);
+  color: var(--pico-primary-inverse);
+}
+
+.verdict button[aria-pressed="true"].verdict-slop {
+  background: var(--pico-color);
+  border-color: var(--pico-color);
+  color: var(--pico-background-color);
+}
+
 @media (max-width: 576px) {
   .feed-card {
     grid-template-columns: 1fr;
