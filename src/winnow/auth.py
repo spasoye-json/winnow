@@ -8,11 +8,13 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 
 SCOPES = ["https://www.googleapis.com/auth/youtube.readonly"]
 CLIENT_SECRETS_ENV = "WINNOW_CLIENT_SECRETS"
-DEFAULT_CLIENT_SECRETS = "client_secrets.json"
+DEFAULT_CLIENT_SECRETS = "~/.config/winnow/client_secret.json"
 
 
 def client_secrets_path():
-    return os.environ.get(CLIENT_SECRETS_ENV, DEFAULT_CLIENT_SECRETS)
+    return os.environ.get(
+        CLIENT_SECRETS_ENV, os.path.expanduser(DEFAULT_CLIENT_SECRETS)
+    )
 
 
 def load_client_config(path):
