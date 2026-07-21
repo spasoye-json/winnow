@@ -282,7 +282,9 @@ def _agreement_tile(label, agree, total, noun, direction, provisional):
         "count_display": (
             f"{agree} of {total} {noun} verdicts scored {direction} threshold"),
         "provisional": provisional,
-        "needed_display": f"{total} of {CALIBRATION_FLOOR} verdicts needed",
+        "needed_display": (
+            f"{total} of {CALIBRATION_FLOOR} verdicts needed"
+            if total < CALIBRATION_FLOOR else None),
         "met": pct is not None and pct >= 80,
     }
 

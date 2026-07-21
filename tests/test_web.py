@@ -1074,6 +1074,28 @@ def test_calibration_provisional_at_19_but_not_at_20_per_class(tmp_path):
     assert "provisional" not in _seeded_calibration(tmp_path, "c", 20, 20).lower()
 
 
+def test_calibration_needed_count_only_on_tiles_below_floor(tmp_path):
+    body = _seeded_calibration(tmp_path, "a", 25, 5)
+    assert "provisional" in body.lower()
+    assert "5 of 20 verdicts needed" in body
+    assert "25 of 20 verdicts needed" not in body
+
+
+def test_calibration_lists_slop_scored_above_threshold_as_disagreement(tmp_path):
+    db_path = _seed_db(tmp_path)
+    conn = connect(str(db_path))
+    ch = _channel(conn, "Chan", "chan1")
+    _judged(conn, ch, "s1", _flat(8.0), "slop", title="Overrated video")
+    _judged(conn, ch, "s2", _flat(4.0), "slop", title="Agreeing video")
+    conn.commit()
+    conn.close()
+
+    body = _get_calibration(db_path).text
+    assert "Overrated video" in body
+    assert "Agreeing video" not in body
+    assert "1 of 2 slop verdicts scored below threshold" in body
+
+
 def test_calibration_disagreement_list_sorted_by_distance_from_threshold(tmp_path):
     db_path = _seed_db(tmp_path)
     conn = connect(str(db_path))

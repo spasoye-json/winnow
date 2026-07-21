@@ -24,7 +24,7 @@
     </div>
     <div class="tile-pct">{{ t.pct_display }}</div>
     <div class="tile-sub">{{ t.count_display }}</div>
-    {% if t.provisional %}<div class="tile-needed">{{ t.needed_display }}</div>{% endif %}
+    {% if t.needed_display %}<div class="tile-needed">{{ t.needed_display }}</div>{% endif %}
   </article>
   {% endfor %}
 </div>
