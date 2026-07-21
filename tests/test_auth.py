@@ -3,7 +3,13 @@ import datetime
 import pytest
 from google.oauth2.credentials import Credentials
 
-from winnow.auth import SCOPES, load_credentials, save_credentials
+from winnow.auth import (
+    CLIENT_SECRETS_ENV,
+    SCOPES,
+    client_secrets_path,
+    load_credentials,
+    save_credentials,
+)
 from winnow.db import connect, init_db
 
 CLIENT_CONFIG = {
@@ -31,6 +37,19 @@ def make_credentials(token, expiry):
         scopes=list(SCOPES),
         expiry=expiry,
     )
+
+
+def test_default_client_secrets_path_under_config(monkeypatch):
+    monkeypatch.delenv(CLIENT_SECRETS_ENV, raising=False)
+    monkeypatch.setenv("HOME", "/home/example")
+    assert (
+        client_secrets_path() == "/home/example/.config/winnow/client_secret.json"
+    )
+
+
+def test_client_secrets_env_override_takes_precedence(monkeypatch):
+    monkeypatch.setenv(CLIENT_SECRETS_ENV, "/custom/secret.json")
+    assert client_secrets_path() == "/custom/secret.json"
 
 
 @pytest.fixture

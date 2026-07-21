@@ -104,6 +104,33 @@ def test_connect_command_persists_credentials(tmp_path, monkeypatch):
     assert row[3] is not None
 
 
+def test_connect_client_secrets_flag_overrides_env(tmp_path, monkeypatch):
+    db_path = tmp_path / "winnow.db"
+    main(["init", "--db", str(db_path)])
+
+    secrets = tmp_path / "flag_secret.json"
+    secrets.write_text(json.dumps(CLIENT_CONFIG))
+    monkeypatch.setenv(auth.CLIENT_SECRETS_ENV, str(tmp_path / "env_secret.json"))
+
+    captured = {}
+    fake = SimpleNamespace(
+        token="access-token",
+        refresh_token="refresh-token",
+        expiry=None,
+        scopes=list(SCOPES),
+    )
+
+    def fake_flow(client_config, scopes=SCOPES):
+        captured["client_config"] = client_config
+        return fake
+
+    monkeypatch.setattr(auth, "run_consent_flow", fake_flow)
+
+    main(["connect", "--db", str(db_path), "--client-secrets", str(secrets)])
+
+    assert captured["client_config"] == CLIENT_CONFIG
+
+
 SCORE_PAYLOAD = {
     "scores": {
         "info_density": 8,
