@@ -411,6 +411,55 @@ def test_feed_filters_by_channel(tmp_path):
     assert "Beta video" not in body
 
 
+def _topic(conn, query):
+    cur = conn.execute(
+        "INSERT INTO topics (query, active) VALUES (?, 1)", (query,)
+    )
+    return cur.lastrowid
+
+
+def _topic_video(conn, yt_video_id, topic_id, *, title="A title",
+                 published_at="2026-07-20T00:00:00+00:00"):
+    cur = conn.execute(
+        "INSERT INTO videos (yt_video_id, topic_id, title, thumbnail_url, "
+        "transcript_status, published_at) VALUES (?, ?, ?, ?, 'ok', ?)",
+        (yt_video_id, topic_id, title, "https://i.ytimg.com/vi/x/hq.jpg",
+         published_at),
+    )
+    return cur.lastrowid
+
+
+def test_feed_filters_by_topic(tmp_path):
+    db_path = _seed_db(tmp_path)
+    conn = connect(str(db_path))
+    solar = _topic(conn, "solar power")
+    fusion = _topic(conn, "fusion")
+    vs = _topic_video(conn, "vidS", solar, title="Solar video")
+    vf = _topic_video(conn, "vidF", fusion, title="Fusion video")
+    _score(conn, vs, _flat(8.0), overall=8.0)
+    _score(conn, vf, _flat(8.0), overall=8.0)
+    conn.commit()
+    conn.close()
+
+    body = _get(db_path, {"topic": str(solar)}).text
+    assert "Solar video" in body
+    assert "Fusion video" not in body
+
+
+def test_filter_form_lists_topics(tmp_path):
+    db_path = _seed_db(tmp_path)
+    conn = connect(str(db_path))
+    solar = _topic(conn, "solar power")
+    _score(conn, _topic_video(conn, "vidS", solar), _flat(8.0), overall=8.0)
+    conn.commit()
+    conn.close()
+
+    body = _get(db_path).text
+    assert 'name="topic"' in body
+    assert "solar power" in body
+    assert f'value="{solar}"' in body
+
+
 def test_feed_filters_by_since_date(tmp_path):
     db_path = _seed_db(tmp_path)
     conn = connect(str(db_path))

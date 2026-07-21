@@ -2,7 +2,12 @@ import re
 from datetime import UTC, datetime, timedelta
 
 from winnow.sync import sync_subscriptions
-from winnow.youtube import fetch_videos, first_uploads_page, uploads_playlist_id
+from winnow.youtube import (
+    fetch_videos,
+    first_uploads_page,
+    search_videos,
+    uploads_playlist_id,
+)
 
 BACKFILL_LIMIT = 10
 BACKFILL_MAX_AGE = timedelta(days=30)
@@ -13,9 +18,9 @@ DURATION = re.compile(r"P(?:(\d+)D)?T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?")
 
 INSERT_VIDEO = """
 INSERT INTO videos
-    (yt_video_id, channel_id, title, description, duration_sec,
+    (yt_video_id, channel_id, topic_id, title, description, duration_sec,
      published_at, view_count, thumbnail_url, ingested_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(yt_video_id) DO NOTHING
 """
 
@@ -33,6 +38,11 @@ def run_ingest(conn, client, now=None):
     ).fetchall()
     for channel_id, yt_channel_id in channels:
         _ingest_channel(conn, client, channel_id, yt_channel_id, now)
+    topics = conn.execute(
+        "SELECT id, query FROM topics WHERE active = 1 ORDER BY id"
+    ).fetchall()
+    for topic_id, query in topics:
+        _ingest_topic(conn, client, topic_id, query, now)
     conn.execute(RECORD_INGEST, (LAST_INGEST_KEY, now))
     conn.commit()
 
@@ -41,7 +51,19 @@ def _ingest_channel(conn, client, channel_id, yt_channel_id, now):
     items = first_uploads_page(client, uploads_playlist_id(yt_channel_id))
     video_ids = _select_video_ids(conn, channel_id, items, now)
     for video in fetch_videos(client, video_ids):
-        _store_video(conn, channel_id, video, now)
+        _store_video(conn, video, now, channel_id=channel_id)
+
+
+def _ingest_topic(conn, client, topic_id, query, now):
+    items = search_videos(client, query)
+    stored = _stored_video_ids(conn)
+    video_ids = [
+        video_id
+        for video_id in (_search_video_id(item) for item in items)
+        if video_id and video_id not in stored
+    ]
+    for video in fetch_videos(client, video_ids):
+        _store_video(conn, video, now, topic_id=topic_id)
 
 
 def _select_video_ids(conn, channel_id, items, now):
@@ -70,7 +92,7 @@ def _stored_video_ids(conn):
     return {row[0] for row in conn.execute("SELECT yt_video_id FROM videos")}
 
 
-def _store_video(conn, channel_id, video, now):
+def _store_video(conn, video, now, *, channel_id=None, topic_id=None):
     snippet = video.get("snippet", {})
     content = video.get("contentDetails", {})
     statistics = video.get("statistics", {})
@@ -79,6 +101,7 @@ def _store_video(conn, channel_id, video, now):
         (
             video["id"],
             channel_id,
+            topic_id,
             snippet.get("title"),
             snippet.get("description"),
             _duration_seconds(content.get("duration")),
@@ -88,6 +111,10 @@ def _store_video(conn, channel_id, video, now):
             now,
         ),
     )
+
+
+def _search_video_id(item):
+    return item.get("id", {}).get("videoId")
 
 
 def _video_id(item):

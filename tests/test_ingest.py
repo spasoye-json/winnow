@@ -82,11 +82,22 @@ class FakeVideos:
         return FakeRequest({"items": items})
 
 
+class FakeSearch:
+    def __init__(self, results_by_query):
+        self.results_by_query = results_by_query
+        self.calls = 0
+
+    def list(self, *, q, **kwargs):
+        self.calls += 1
+        return FakeRequest({"items": self.results_by_query.get(q, [])})
+
+
 class FakeYouTube:
-    def __init__(self, subscriptions=(), playlists=None, videos=None):
+    def __init__(self, subscriptions=(), playlists=None, videos=None, searches=None):
         self._subscriptions = FakeSubscriptions(list(subscriptions))
         self._playlists = FakePlaylistItems(playlists or {})
         self._videos = FakeVideos(videos or {})
+        self._search = FakeSearch(searches or {})
 
     def subscriptions(self):
         return self._subscriptions
@@ -96,6 +107,13 @@ class FakeYouTube:
 
     def videos(self):
         return self._videos
+
+    def search(self):
+        return self._search
+
+
+def search_result(video_id):
+    return {"id": {"kind": "youtube#video", "videoId": video_id}}
 
 
 def uploads_id(channel_id):
@@ -121,6 +139,24 @@ def add_video(conn, channel_id, yt_video_id):
         (yt_video_id, internal_id),
     )
     conn.commit()
+
+
+def add_topic(conn, query, *, active=1):
+    cur = conn.execute(
+        "INSERT INTO topics (query, active, added_at) "
+        "VALUES (?, ?, '2026-01-01T00:00:00+00:00')",
+        (query, active),
+    )
+    conn.commit()
+    return cur.lastrowid
+
+
+def topic_video_ids(conn, topic_id):
+    rows = conn.execute(
+        "SELECT yt_video_id FROM videos WHERE topic_id = ? ORDER BY yt_video_id",
+        (topic_id,),
+    ).fetchall()
+    return [row[0] for row in rows]
 
 
 def stored_video_ids(conn, channel_id):
@@ -354,3 +390,94 @@ def test_thumbnail_prefers_highest_available_resolution(conn):
         "SELECT thumbnail_url FROM videos WHERE yt_video_id = 'v1'"
     ).fetchone()
     assert url == "https://i.ytimg.com/vi/v1/maxres.jpg"
+
+
+def test_active_topic_query_is_searched_and_stored(conn):
+    topic_id = add_topic(conn, "energy storage")
+    client = FakeYouTube(
+        searches={"energy storage": [search_result("t1"), search_result("t2")]},
+        videos={"t1": video_detail("t1"), "t2": video_detail("t2")},
+    )
+
+    run_ingest(conn, client, now=NOW)
+
+    assert topic_video_ids(conn, topic_id) == ["t1", "t2"]
+
+
+def test_topic_video_enters_pipeline_like_a_channel_upload(conn):
+    topic_id = add_topic(conn, "energy storage")
+    client = FakeYouTube(
+        searches={"energy storage": [search_result("t1")]},
+        videos={"t1": video_detail("t1", title="Grid batteries")},
+    )
+
+    run_ingest(conn, client, now=NOW)
+
+    row = conn.execute(
+        "SELECT channel_id, topic_id, title, transcript_status "
+        "FROM videos WHERE yt_video_id = 't1'"
+    ).fetchone()
+    assert row == (None, topic_id, "Grid batteries", "pending")
+
+
+def test_inactive_topics_are_not_searched(conn):
+    add_topic(conn, "dropped", active=0)
+    client = FakeYouTube(searches={"dropped": [search_result("t1")]})
+
+    run_ingest(conn, client, now=NOW)
+
+    assert client._search.calls == 0
+    assert conn.execute("SELECT COUNT(*) FROM videos").fetchone()[0] == 0
+
+
+def test_no_topics_means_no_search_and_channel_ingest_unaffected(conn):
+    add_channel(conn, "UC1")
+    client = FakeYouTube(
+        playlists={uploads_id("UC1"): [upload("v1", RECENT)]},
+        videos={"v1": video_detail("v1")},
+    )
+
+    run_ingest(conn, client, now=NOW)
+
+    assert client._search.calls == 0
+    assert stored_video_ids(conn, "UC1") == ["v1"]
+
+
+def test_topic_videos_deduplicated_on_video_id(conn):
+    add_channel(conn, "UC1")
+    add_video(conn, "UC1", "shared")
+    topic_id = add_topic(conn, "overlap")
+    client = FakeYouTube(
+        searches={"overlap": [search_result("shared"), search_result("fresh")]},
+        videos={"shared": video_detail("shared"), "fresh": video_detail("fresh")},
+    )
+
+    run_ingest(conn, client, now=NOW)
+
+    assert conn.execute(
+        "SELECT COUNT(*) FROM videos WHERE yt_video_id = 'shared'"
+    ).fetchone()[0] == 1
+    (channel_internal,) = conn.execute(
+        "SELECT id FROM channels WHERE yt_channel_id = 'UC1'"
+    ).fetchone()
+    (owner,) = conn.execute(
+        "SELECT channel_id FROM videos WHERE yt_video_id = 'shared'"
+    ).fetchone()
+    assert owner == channel_internal
+    assert topic_video_ids(conn, topic_id) == ["fresh"]
+
+
+def test_each_active_topic_is_searched_once(conn):
+    add_topic(conn, "alpha")
+    add_topic(conn, "beta")
+    client = FakeYouTube(
+        searches={
+            "alpha": [search_result("a1")],
+            "beta": [search_result("b1")],
+        },
+        videos={"a1": video_detail("a1"), "b1": video_detail("b1")},
+    )
+
+    run_ingest(conn, client, now=NOW)
+
+    assert client._search.calls == 2

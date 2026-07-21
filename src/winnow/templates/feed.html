@@ -56,6 +56,15 @@
     </option>
     {% endfor %}
   </select>
+  <select name="topic" aria-label="Topic">
+    <option value="">All topics</option>
+    {% for tp in topics %}
+    <option value="{{ tp.id }}"
+            {% if tp.id|string == filters.topic %}selected{% endif %}>
+      {{ tp.query }}
+    </option>
+    {% endfor %}
+  </select>
   <input type="date" name="since" aria-label="Published since"
          value="{{ filters.since or '' }}" />
   <input type="date" name="until" aria-label="Published until"

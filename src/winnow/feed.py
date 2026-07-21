@@ -296,10 +296,10 @@ def effective_score(dims, weights):
     return sum(dims[d] * weights[d] for d in DIMENSIONS) / total
 
 
-def build_feed(conn, channel=None, since=None, until=None):
+def build_feed(conn, channel=None, topic=None, since=None, until=None):
     weights = load_weights(conn)
     threshold = load_threshold(conn)
-    query, params = _filtered_query(channel, since, until)
+    query, params = _filtered_query(channel, topic, since, until)
     feed, below, flagged, unscored = [], [], [], []
     for row in conn.execute(query, params).fetchall():
         (yt_id, title, thumbnail, status, channel_name, *score_cols, verdict) = row
@@ -329,15 +329,24 @@ def build_feed(conn, channel=None, since=None, until=None):
             {"yt_channel_id": cid, "name": name}
             for cid, name in conn.execute(SELECT_CHANNELS).fetchall()
         ],
-        "filters": {"channel": channel, "since": since, "until": until},
+        "topics": [
+            {"id": tid, "query": topic_query}
+            for tid, topic_query in conn.execute(SELECT_ACTIVE_TOPICS).fetchall()
+        ],
+        "filters": {
+            "channel": channel, "topic": topic, "since": since, "until": until,
+        },
     }
 
 
-def _filtered_query(channel, since, until):
+def _filtered_query(channel, topic, since, until):
     clauses, params = [], []
     if channel:
         clauses.append("c.yt_channel_id = ?")
         params.append(channel)
+    if topic:
+        clauses.append("v.topic_id = ?")
+        params.append(topic)
     if since:
         clauses.append("date(v.published_at) >= date(?)")
         params.append(since)
