@@ -41,6 +41,7 @@ from winnow.scoring import (
     SCORING_COUNT_KEY,
     SCORING_DAY_KEY,
     SYSTEM_PROMPT,
+    TRANSCRIPT_PACING_SEC,
     build_client,
     day_count,
     model_name,
@@ -1053,7 +1054,22 @@ def test_pacing_sleeps_ten_seconds_between_llm_calls(conn):
         sleep=sleep,
     )
 
-    assert sleep.delays == [PACING_SEC]
+    assert sleep.delays == [TRANSCRIPT_PACING_SEC, PACING_SEC]
+
+
+def test_fetch_pacing_separates_consecutive_fetches_without_scoring(conn):
+    add_channel(conn, "UC1")
+    add_pending_video(conn, "UC1", "v1", published_at="2026-07-05T00:00:00+00:00")
+    add_pending_video(conn, "UC1", "v2", published_at="2026-07-04T00:00:00+00:00")
+    fetch = raising_fetcher(PoTokenRequired("v1"))
+    sleep = recording_sleep()
+
+    run_scoring(conn, fetch, FakeLLM(), model="m", now=NOW, sleep=sleep)
+
+    assert fetch.calls == ["v1", "v2"]
+    assert sleep.delays == [TRANSCRIPT_PACING_SEC]
+    assert score_row(conn, "v1") is None
+    assert score_row(conn, "v2") is None
 
 
 def test_backlog_drains_newest_first_by_publish_date(conn):
