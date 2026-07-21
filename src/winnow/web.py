@@ -5,13 +5,19 @@ from pathlib import Path
 from typing import Literal
 
 from fastapi import FastAPI, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from winnow import auth
 from winnow.db import connect
-from winnow.feed import build_detail, build_feed, record_verdict
+from winnow.feed import (
+    build_detail,
+    build_feed,
+    build_settings,
+    record_verdict,
+    save_settings,
+)
 from winnow.scheduler import due_check_loop, tick
 from winnow.youtube import build_client
 
@@ -79,6 +85,40 @@ def create_app(db_path, client_secrets_path):
         finally:
             conn.close()
         return templates.TemplateResponse(request, "feed.html", context)
+
+    @app.get("/settings", response_class=HTMLResponse)
+    def settings_page(request: Request):
+        conn = connect(db_path)
+        try:
+            context = build_settings(conn)
+        finally:
+            conn.close()
+        return templates.TemplateResponse(request, "settings.html", context)
+
+    @app.post("/settings")
+    def update_settings(
+        threshold: float = Form(..., ge=0, le=10),
+        info_density: float = Form(..., ge=0, le=100),
+        originality: float = Form(..., ge=0, le=100),
+        clickbait_gap: float = Form(..., ge=0, le=100),
+        padding: float = Form(..., ge=0, le=100),
+        depth: float = Form(..., ge=0, le=100),
+        production: float = Form(..., ge=0, le=100),
+    ):
+        weights = {
+            "info_density": info_density,
+            "originality": originality,
+            "clickbait_gap": clickbait_gap,
+            "padding": padding,
+            "depth": depth,
+            "production": production,
+        }
+        conn = connect(db_path)
+        try:
+            save_settings(conn, threshold, {k: v / 100 for k, v in weights.items()})
+        finally:
+            conn.close()
+        return RedirectResponse("/settings", status_code=303)
 
     @app.get("/video/{yt_video_id}", response_class=HTMLResponse)
     def video_detail(request: Request, yt_video_id: str):

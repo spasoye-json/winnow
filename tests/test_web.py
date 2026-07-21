@@ -94,6 +94,29 @@ def _post_verdict(db_path, yt_video_id, verdict):
         return client.post(f"/video/{yt_video_id}/verdict", data={"verdict": verdict})
 
 
+def _get_settings(db_path):
+    app = create_app(str(db_path), str(db_path.parent / "missing_secrets.json"))
+    with TestClient(app) as client:
+        return client.get("/settings")
+
+
+def _post_settings(db_path, data):
+    app = create_app(str(db_path), str(db_path.parent / "missing_secrets.json"))
+    with TestClient(app) as client:
+        return client.post("/settings", data=data)
+
+
+DEFAULT_SETTINGS_FORM = {
+    "threshold": "6.0",
+    "info_density": "25",
+    "originality": "20",
+    "clickbait_gap": "20",
+    "padding": "15",
+    "depth": "15",
+    "production": "5",
+}
+
+
 def test_feed_card_shows_all_fields(tmp_path):
     db_path = _seed_db(tmp_path)
     conn = connect(str(db_path))
@@ -652,3 +675,109 @@ def test_no_cdn_assets(tmp_path):
     assert "unpkg" not in body.lower()
     assert "jsdelivr" not in body.lower()
     assert "/static/pico" in body
+
+
+def _score_count(db_path):
+    conn = connect(str(db_path))
+    count = conn.execute("SELECT COUNT(*) FROM scores").fetchone()[0]
+    conn.close()
+    return count
+
+
+def test_settings_page_is_plain_html_form_with_current_values(tmp_path):
+    db_path = _seed_db(tmp_path)
+    response = _get_settings(db_path)
+    body = response.text
+
+    assert response.status_code == 200
+    assert '<form method="post" action="/settings"' in body
+    assert 'name="threshold"' in body
+    for dim in DIMENSIONS:
+        assert f'name="{dim}"' in body
+
+
+def test_settings_defaults_match_prd_rubric(tmp_path):
+    db_path = _seed_db(tmp_path)
+    body = _get_settings(db_path).text
+
+    assert 'name="threshold"' in body
+    assert 'value="6.0"' in body
+    expected = {"info_density": "25", "originality": "20", "clickbait_gap": "20",
+                "padding": "15", "depth": "15", "production": "5"}
+    for dim, percent in expected.items():
+        field = body.split(f'name="{dim}"', 1)[1].split(">", 1)[0]
+        assert f'value="{percent}"' in field
+
+
+def test_settings_form_persists_threshold_and_weights(tmp_path):
+    db_path = _seed_db(tmp_path)
+
+    _post_settings(db_path, {
+        **DEFAULT_SETTINGS_FORM,
+        "threshold": "7.5",
+        "info_density": "0",
+        "padding": "50",
+    })
+
+    conn = connect(str(db_path))
+    threshold = conn.execute(
+        "SELECT value FROM settings WHERE key = 'threshold'").fetchone()[0]
+    weights = json.loads(
+        conn.execute("SELECT value FROM settings WHERE key = 'weights'").fetchone()[0])
+    conn.close()
+
+    assert float(threshold) == 7.5
+    assert weights["info_density"] == 0.0
+    assert weights["padding"] == 0.5
+
+    body = _get_settings(db_path).text
+    assert 'value="7.5"' in body
+    padding_field = body.split('name="padding"', 1)[1].split(">", 1)[0]
+    assert 'value="50"' in padding_field
+
+
+def test_settings_change_reranks_feed_instantly_without_rescoring(tmp_path):
+    db_path = _seed_db(tmp_path)
+    conn = connect(str(db_path))
+    channel_id = _channel(conn, "Chan", "chan1")
+    video_id = _video(conn, "vid", channel_id, title="Weight sensitive")
+    _score(conn, video_id, {**_flat(9.0), "padding": 0.0}, overall=8.0)
+    conn.commit()
+    conn.close()
+
+    before = _get(db_path).text
+    assert "Weight sensitive" in before.split("Below threshold")[0]
+
+    scores_before = _score_count(db_path)
+    _post_settings(db_path, {
+        **DEFAULT_SETTINGS_FORM,
+        "info_density": "0", "originality": "0", "clickbait_gap": "0",
+        "padding": "100", "depth": "0", "production": "0",
+    })
+    assert _score_count(db_path) == scores_before
+
+    after = _get(db_path).text
+    below = after.split("Below threshold", 1)[1]
+    assert "Weight sensitive" in below
+
+
+def test_settings_form_rejects_out_of_range_values(tmp_path):
+    db_path = _seed_db(tmp_path)
+
+    for bad in ({"threshold": "10.5"}, {"threshold": "-1"},
+                {"padding": "-5"}, {"depth": "101"}):
+        response = _post_settings(db_path, {**DEFAULT_SETTINGS_FORM, **bad})
+        assert response.status_code == 422
+
+    conn = connect(str(db_path))
+    stored = conn.execute(
+        "SELECT COUNT(*) FROM settings WHERE key IN ('threshold', 'weights')"
+    ).fetchone()[0]
+    conn.close()
+    assert stored == 0
+
+
+def test_feed_links_to_settings(tmp_path):
+    db_path = _seed_db(tmp_path)
+    body = _get(db_path).text
+    assert 'href="/settings"' in body
