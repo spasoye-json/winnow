@@ -34,6 +34,7 @@ CREATE TABLE IF NOT EXISTS videos (
     id INTEGER PRIMARY KEY,
     yt_video_id TEXT NOT NULL UNIQUE,
     channel_id INTEGER REFERENCES channels(id),
+    topic_id INTEGER REFERENCES topics(id),
     title TEXT,
     description TEXT,
     duration_sec INTEGER,

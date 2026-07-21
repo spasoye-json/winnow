@@ -2,6 +2,7 @@ from googleapiclient.discovery import build
 
 SUBSCRIPTIONS_PAGE_SIZE = 50
 PLAYLIST_PAGE_SIZE = 50
+SEARCH_PAGE_SIZE = 25
 
 
 def build_client(credentials):
@@ -27,6 +28,21 @@ def fetch_videos(client, video_ids):
     response = (
         client.videos()
         .list(part="snippet,contentDetails,statistics", id=",".join(video_ids))
+        .execute()
+    )
+    return response.get("items", [])
+
+
+def search_videos(client, query):
+    response = (
+        client.search()
+        .list(
+            part="snippet",
+            q=query,
+            type="video",
+            order="date",
+            maxResults=SEARCH_PAGE_SIZE,
+        )
         .execute()
     )
     return response.get("items", [])
