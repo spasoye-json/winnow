@@ -315,6 +315,58 @@ def test_transcript_status_and_language_stored(conn):
     assert language == "es"
 
 
+def test_prompt_version_is_two():
+    assert PROMPT_VERSION == 2
+
+
+def test_system_prompt_requires_english_summary_and_rationale():
+    lowered = SYSTEM_PROMPT.lower()
+    assert "any language" in lowered
+    assert "english" in lowered
+    english_index = lowered.index("english")
+    assert "summary" in lowered[english_index - 200:english_index + 200]
+    assert "rationale" in lowered[english_index - 200:english_index + 200]
+
+
+def test_system_prompt_explains_omission_marker():
+    assert OMISSION_MARKER in SYSTEM_PROMPT
+    lowered = SYSTEM_PROMPT.lower()
+    assert "head" in lowered
+    assert "middle" in lowered
+    assert "tail" in lowered
+
+
+def test_scoring_request_uses_schema_response_format(conn):
+    add_channel(conn, "UC1")
+    add_pending_video(conn, "UC1", "v1")
+    llm = FakeLLM()
+
+    run_scoring(
+        conn,
+        fetcher(Transcript(text="body", language_code="en")),
+        llm,
+        model="m",
+        now=NOW,
+    )
+
+    response_format = llm.completions.calls[0]["kwargs"]["response_format"]
+    assert response_format["type"] == "json_schema"
+    schema = response_format["json_schema"]["schema"]
+    props = schema["properties"]
+    assert set(props["scores"]["properties"]) == {
+        "info_density",
+        "originality",
+        "clickbait_gap",
+        "padding",
+        "depth",
+        "production",
+    }
+    assert "overall" in props
+    assert "hard_flags" in props
+    assert "summary" in props
+    assert "rationale" in props
+
+
 def test_system_prompt_is_first_and_identical_across_calls(conn):
     add_channel(conn, "UC1")
     add_pending_video(conn, "UC1", "v1", title="First")
