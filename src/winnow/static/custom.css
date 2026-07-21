@@ -1,0 +1,37 @@
+.feed-card {
+  display: grid;
+  grid-template-columns: 168px 1fr;
+  gap: 1rem;
+  align-items: start;
+}
+
+.feed-card img {
+  width: 168px;
+  height: auto;
+  border-radius: var(--pico-border-radius);
+}
+
+.score-badge {
+  display: inline-block;
+  font-weight: 700;
+  padding: 0.15rem 0.55rem;
+  border-radius: var(--pico-border-radius);
+  background: var(--pico-primary-background);
+  color: var(--pico-primary-inverse);
+}
+
+.marker {
+  display: inline-block;
+  margin-left: 0.5rem;
+  font-size: 0.8rem;
+  vertical-align: middle;
+}
+
+@media (max-width: 576px) {
+  .feed-card {
+    grid-template-columns: 1fr;
+  }
+  .feed-card img {
+    width: 100%;
+  }
+}
