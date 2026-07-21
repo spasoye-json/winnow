@@ -1072,6 +1072,26 @@ def test_fetch_pacing_separates_consecutive_fetches_without_scoring(conn):
     assert score_row(conn, "v2") is None
 
 
+def test_fetch_pacing_applies_between_transient_failure_retries(conn):
+    add_channel(conn, "UC1")
+    add_pending_video(conn, "UC1", "v1", published_at="2026-07-05T00:00:00+00:00")
+    add_pending_video(conn, "UC1", "v2", published_at="2026-07-04T00:00:00+00:00")
+    error = YouTubeRequestFailed("v1", HTTPError("429 Client Error: Too Many Requests"))
+    fetch = raising_fetcher(error)
+    sleep = recording_sleep()
+
+    run_scoring(conn, fetch, FakeLLM(), model="m", now=NOW, sleep=sleep)
+
+    backoffs = [
+        INITIAL_BACKOFF_SEC * (2**attempt)
+        for attempt in range(MAX_TRANSIENT_ATTEMPTS - 1)
+    ]
+    assert fetch.calls == (
+        ["v1"] * MAX_TRANSIENT_ATTEMPTS + ["v2"] * MAX_TRANSIENT_ATTEMPTS
+    )
+    assert sleep.delays == [*backoffs, TRANSCRIPT_PACING_SEC, *backoffs]
+
+
 def test_backlog_drains_newest_first_by_publish_date(conn):
     add_channel(conn, "UC1")
     add_pending_video(
