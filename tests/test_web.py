@@ -82,6 +82,12 @@ def _get(db_path):
         return client.get("/")
 
 
+def _get_detail(db_path, yt_video_id):
+    app = create_app(str(db_path), str(db_path.parent / "missing_secrets.json"))
+    with TestClient(app) as client:
+        return client.get(f"/video/{yt_video_id}")
+
+
 def test_feed_card_shows_all_fields(tmp_path):
     db_path = _seed_db(tmp_path)
     conn = connect(str(db_path))
@@ -256,6 +262,107 @@ def test_genre_bias_note_visible(tmp_path):
     db_path = _seed_db(tmp_path)
     body = _get(db_path).text
     assert "genre" in body.lower()
+
+
+def test_detail_shows_full_score_breakdown(tmp_path):
+    db_path = _seed_db(tmp_path)
+    conn = connect(str(db_path))
+    channel_id = _channel(conn, "Deep Dives", "chan1")
+    dims = {
+        "info_density": 8.0, "originality": 7.0, "clickbait_gap": 9.0,
+        "padding": 6.0, "depth": 5.0, "production": 4.0,
+    }
+    video_id = _video(conn, "vid123", channel_id, title="On Compilers")
+    _score(conn, video_id, dims, overall=7.0, summary="Explains compiler passes.")
+    conn.commit()
+    conn.close()
+
+    response = _get_detail(db_path, "vid123")
+    body = response.text
+
+    assert response.status_code == 200
+    assert "On Compilers" in body
+    assert "Deep Dives" in body
+    for label in ("Information density", "Originality", "Clickbait gap", "Padding",
+                  "Depth", "Production integrity"):
+        assert label in body
+    assert "Explains compiler passes." in body
+    assert "rationale" in body
+    assert "gemini-3.1-flash-lite" in body
+    assert "prompt v1" in body
+
+
+def test_detail_links_to_youtube(tmp_path):
+    db_path = _seed_db(tmp_path)
+    conn = connect(str(db_path))
+    channel_id = _channel(conn, "Chan", "chan1")
+    video_id = _video(conn, "vid123", channel_id, title="Linked out")
+    _score(conn, video_id, _flat(8.0), overall=8.0)
+    conn.commit()
+    conn.close()
+
+    body = _get_detail(db_path, "vid123").text
+    assert "https://www.youtube.com/watch?v=vid123" in body
+
+
+def test_detail_shows_hard_flags(tmp_path):
+    db_path = _seed_db(tmp_path)
+    conn = connect(str(db_path))
+    channel_id = _channel(conn, "Chan", "chan1")
+    video_id = _video(conn, "flagged", channel_id, title="Flagged one")
+    _score(conn, video_id, _flat(9.0), overall=9.0, hard_flags=["ai_voice"])
+    conn.commit()
+    conn.close()
+
+    body = _get_detail(db_path, "flagged").text
+    assert "ai_voice" in body
+
+
+def test_detail_reachable_from_feed_card(tmp_path):
+    db_path = _seed_db(tmp_path)
+    conn = connect(str(db_path))
+    channel_id = _channel(conn, "Chan", "chan1")
+    video_id = _video(conn, "vid123", channel_id, title="Card links here")
+    _score(conn, video_id, _flat(8.0), overall=8.0)
+    conn.commit()
+    conn.close()
+
+    body = _get(db_path).text
+    assert "/video/vid123" in body
+
+
+def test_detail_unscored_video_shows_reason_without_breakdown(tmp_path):
+    db_path = _seed_db(tmp_path)
+    conn = connect(str(db_path))
+    channel_id = _channel(conn, "Chan", "chan1")
+    _video(conn, "pend", channel_id, title="Pending video",
+           transcript_status="pending")
+    conn.commit()
+    conn.close()
+
+    body = _get_detail(db_path, "pend").text
+    assert "Pending video" in body
+    assert "awaiting scoring" in body
+    assert "Score breakdown" not in body
+
+
+def test_detail_unknown_video_is_404(tmp_path):
+    db_path = _seed_db(tmp_path)
+    response = _get_detail(db_path, "nope")
+    assert response.status_code == 404
+
+
+def test_detail_effective_score_recomputed_from_weights(tmp_path):
+    db_path = _seed_db(tmp_path)
+    conn = connect(str(db_path))
+    channel_id = _channel(conn, "Chan", "chan1")
+    video_id = _video(conn, "vid", channel_id, title="Recomputed")
+    _score(conn, video_id, _flat(8.0), overall=1.0)
+    conn.commit()
+    conn.close()
+
+    body = _get_detail(db_path, "vid").text
+    assert "8.0" in body
 
 
 def test_no_cdn_assets(tmp_path):

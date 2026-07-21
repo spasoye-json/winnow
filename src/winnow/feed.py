@@ -13,6 +13,15 @@ FULL_CONFIDENCE = 1.0
 
 DIMENSIONS = tuple(DEFAULT_WEIGHTS)
 
+DIMENSION_LABELS = {
+    "info_density": "Information density",
+    "originality": "Originality",
+    "clickbait_gap": "Clickbait gap",
+    "padding": "Padding",
+    "depth": "Depth",
+    "production": "Production integrity",
+}
+
 YOUTUBE_WATCH_URL = "https://www.youtube.com/watch?v="
 
 UNSCORED_REASONS = {
@@ -32,6 +41,20 @@ LEFT JOIN scores s ON s.id = (
     ORDER BY scored_at DESC, id DESC LIMIT 1
 )
 ORDER BY v.published_at DESC, v.id DESC
+"""
+
+SELECT_VIDEO = """
+SELECT v.yt_video_id, v.title, v.thumbnail_url, v.transcript_status, c.name,
+       s.info_density, s.originality, s.clickbait_gap, s.padding, s.depth,
+       s.production, s.summary, s.rationale, s.hard_flags, s.confidence,
+       s.model, s.prompt_version
+FROM videos v
+LEFT JOIN channels c ON c.id = v.channel_id
+LEFT JOIN scores s ON s.id = (
+    SELECT id FROM scores WHERE video_id = v.id
+    ORDER BY scored_at DESC, id DESC LIMIT 1
+)
+WHERE v.yt_video_id = ?
 """
 
 
@@ -95,6 +118,7 @@ def _scored_card(yt_id, title, thumbnail, channel, score_cols, weights):
     score = effective_score(dims, weights)
     return {
         "youtube_url": YOUTUBE_WATCH_URL + yt_id,
+        "detail_url": f"/video/{yt_id}",
         "title": title,
         "thumbnail_url": thumbnail,
         "channel": channel,
@@ -109,8 +133,52 @@ def _scored_card(yt_id, title, thumbnail, channel, score_cols, weights):
 def _unscored_card(yt_id, title, thumbnail, channel, status):
     return {
         "youtube_url": YOUTUBE_WATCH_URL + yt_id,
+        "detail_url": f"/video/{yt_id}",
         "title": title,
         "thumbnail_url": thumbnail,
         "channel": channel,
         "reason": UNSCORED_REASONS.get(status, status),
     }
+
+
+def build_detail(conn, yt_video_id):
+    row = conn.execute(SELECT_VIDEO, (yt_video_id,)).fetchone()
+    if row is None:
+        return None
+    (yt_id, title, thumbnail, status, channel, info, orig, click, pad, depth,
+     prod, summary, rationale, flags_json, conf, model, prompt_version) = row
+    detail = {
+        "youtube_url": YOUTUBE_WATCH_URL + yt_id,
+        "title": title,
+        "thumbnail_url": thumbnail,
+        "channel": channel,
+        "scored": info is not None,
+    }
+    if info is None:
+        detail["reason"] = UNSCORED_REASONS.get(status, status)
+        return detail
+    dims = {
+        "info_density": info, "originality": orig, "clickbait_gap": click,
+        "padding": pad, "depth": depth, "production": prod,
+    }
+    weights = load_weights(conn)
+    score = effective_score(dims, weights)
+    detail.update({
+        "score_display": f"{score:.1f}",
+        "dimensions": [
+            {
+                "label": DIMENSION_LABELS[d],
+                "score_display": f"{dims[d]:.1f}",
+                "weight_display": f"{weights[d]:.2f}",
+                "pct": max(0.0, min(dims[d] * 10, 100.0)),
+            }
+            for d in DIMENSIONS
+        ],
+        "hard_flags": json.loads(flags_json) if flags_json else [],
+        "summary": summary,
+        "rationale": rationale,
+        "model": model,
+        "prompt_version": prompt_version,
+        "metadata_only": conf is not None and conf < FULL_CONFIDENCE,
+    })
+    return detail
