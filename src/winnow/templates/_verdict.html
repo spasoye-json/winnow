@@ -1,0 +1,8 @@
+{% macro verdict_buttons(verdict_url, verdict) -%}
+<form class="verdict" hx-post="{{ verdict_url }}" hx-swap="outerHTML">
+  <button type="submit" name="verdict" value="great" class="verdict-great"
+          aria-pressed="{{ 'true' if verdict == 'great' else 'false' }}">Great</button>
+  <button type="submit" name="verdict" value="slop" class="verdict-slop"
+          aria-pressed="{{ 'true' if verdict == 'slop' else 'false' }}">Slop</button>
+</form>
+{%- endmacro %}

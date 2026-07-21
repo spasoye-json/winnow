@@ -2,15 +2,16 @@ import asyncio
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Literal
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from winnow import auth
 from winnow.db import connect
-from winnow.feed import build_detail, build_feed
+from winnow.feed import build_detail, build_feed, record_verdict
 from winnow.scheduler import due_check_loop, tick
 from winnow.youtube import build_client
 
@@ -89,5 +90,20 @@ def create_app(db_path, client_secrets_path):
         if detail is None:
             raise HTTPException(status_code=404)
         return templates.TemplateResponse(request, "detail.html", detail)
+
+    @app.post("/video/{yt_video_id}/verdict", response_class=HTMLResponse)
+    def video_verdict(request: Request, yt_video_id: str,
+                      verdict: Literal["great", "slop"] = Form(...)):
+        conn = connect(db_path)
+        try:
+            new = record_verdict(conn, yt_video_id, verdict)
+        except LookupError as exc:
+            raise HTTPException(status_code=404) from exc
+        finally:
+            conn.close()
+        return templates.TemplateResponse(request, "verdict_snippet.html", {
+            "verdict_url": f"/video/{yt_video_id}/verdict",
+            "verdict": new,
+        })
 
     return app

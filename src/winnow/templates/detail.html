@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_verdict.html" import verdict_buttons %}
 
 {% block content %}
 <p><a href="/">&larr; Back to feed</a></p>
@@ -19,6 +20,8 @@
 {% if not scored %}
 <p>{{ reason }}</p>
 {% else %}
+
+{{ verdict_buttons(verdict_url, verdict) }}
 
 {% if metadata_only %}
 <p><span class="marker">🛈 metadata-only</span> Scored from metadata because no transcript was available.</p>

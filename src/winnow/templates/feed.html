@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_verdict.html" import verdict_buttons %}
 
 {% macro thumbnail(card) %}
 <a href="{{ card.detail_url }}">
@@ -20,6 +21,7 @@
     <p>{{ card.summary }}</p>
     <a href="{{ card.detail_url }}">Why this score</a>
     <a href="{{ card.youtube_url }}" role="button">Watch on YouTube</a>
+    {{ verdict_buttons(card.verdict_url, card.verdict) }}
   </div>
 </article>
 {% endmacro %}
