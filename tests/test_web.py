@@ -853,6 +853,38 @@ def test_settings_adds_manual_channel(tmp_path):
     assert "UCnew" in body
 
 
+def test_settings_adding_lapsed_subscription_makes_it_manual(tmp_path):
+    db_path = _seed_db(tmp_path)
+    conn = connect(str(db_path))
+    _settings_channel(conn, "Lapsed", "UClapsed", source="subscription", active=0)
+    conn.close()
+
+    _post(db_path, "/settings/channels", {"yt_channel_id": "UClapsed"})
+
+    conn = connect(str(db_path))
+    row = conn.execute(
+        "SELECT source, active FROM channels "
+        "WHERE yt_channel_id = 'UClapsed'").fetchone()
+    conn.close()
+    assert row == ("manual", 1)
+
+
+def test_settings_adding_active_subscription_keeps_its_source(tmp_path):
+    db_path = _seed_db(tmp_path)
+    conn = connect(str(db_path))
+    _settings_channel(conn, "Subbed", "UCsub", source="subscription")
+    conn.close()
+
+    _post(db_path, "/settings/channels", {"yt_channel_id": "UCsub"})
+
+    conn = connect(str(db_path))
+    row = conn.execute(
+        "SELECT source, active FROM channels "
+        "WHERE yt_channel_id = 'UCsub'").fetchone()
+    conn.close()
+    assert row == ("subscription", 1)
+
+
 def test_settings_removing_channel_deactivates_not_deletes(tmp_path):
     db_path = _seed_db(tmp_path)
     conn = connect(str(db_path))

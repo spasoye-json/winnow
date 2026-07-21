@@ -154,7 +154,9 @@ def add_channel(conn, yt_channel_id, now=None):
     conn.execute(
         "INSERT INTO channels (yt_channel_id, source, active, added_at) "
         "VALUES (?, 'manual', 1, ?) "
-        "ON CONFLICT(yt_channel_id) DO UPDATE SET active = 1",
+        "ON CONFLICT(yt_channel_id) DO UPDATE SET active = 1, "
+        "source = CASE WHEN channels.active = 0 THEN 'manual' "
+        "ELSE channels.source END",
         (yt_channel_id, now),
     )
     conn.commit()
