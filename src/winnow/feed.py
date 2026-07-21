@@ -40,7 +40,12 @@ LEFT JOIN scores s ON s.id = (
     SELECT id FROM scores WHERE video_id = v.id
     ORDER BY scored_at DESC, id DESC LIMIT 1
 )
-ORDER BY v.published_at DESC, v.id DESC
+"""
+
+SELECT_VIDEOS_ORDER = "\nORDER BY v.published_at DESC, v.id DESC\n"
+
+SELECT_CHANNELS = """
+SELECT yt_channel_id, name FROM channels WHERE name IS NOT NULL ORDER BY name
 """
 
 SELECT_VIDEO = """
@@ -80,17 +85,19 @@ def effective_score(dims, weights):
     return sum(dims[d] * weights[d] for d in DIMENSIONS) / total
 
 
-def build_feed(conn):
+def build_feed(conn, channel=None, since=None, until=None):
     weights = load_weights(conn)
     threshold = load_threshold(conn)
+    query, params = _filtered_query(channel, since, until)
     feed, below, flagged, unscored = [], [], [], []
-    for row in conn.execute(SELECT_VIDEOS).fetchall():
-        (yt_id, title, thumbnail, status, channel, *score_cols) = row
+    for row in conn.execute(query, params).fetchall():
+        (yt_id, title, thumbnail, status, channel_name, *score_cols) = row
         info = score_cols[0]
         if info is None:
-            unscored.append(_unscored_card(yt_id, title, thumbnail, channel, status))
+            unscored.append(
+                _unscored_card(yt_id, title, thumbnail, channel_name, status))
             continue
-        card = _scored_card(yt_id, title, thumbnail, channel, score_cols, weights)
+        card = _scored_card(yt_id, title, thumbnail, channel_name, score_cols, weights)
         if card["hard_flags"]:
             flagged.append(card)
         elif card["score"] >= threshold:
@@ -106,7 +113,29 @@ def build_feed(conn):
         "below": below,
         "flagged": flagged,
         "unscored": unscored,
+        "channels": [
+            {"yt_channel_id": cid, "name": name}
+            for cid, name in conn.execute(SELECT_CHANNELS).fetchall()
+        ],
+        "filters": {"channel": channel, "since": since, "until": until},
     }
+
+
+def _filtered_query(channel, since, until):
+    clauses, params = [], []
+    if channel:
+        clauses.append("c.yt_channel_id = ?")
+        params.append(channel)
+    if since:
+        clauses.append("date(v.published_at) >= date(?)")
+        params.append(since)
+    if until:
+        clauses.append("date(v.published_at) <= date(?)")
+        params.append(until)
+    query = SELECT_VIDEOS
+    if clauses:
+        query += "WHERE " + " AND ".join(clauses)
+    return query + SELECT_VIDEOS_ORDER, params
 
 
 def _scored_card(yt_id, title, thumbnail, channel, score_cols, weights):
