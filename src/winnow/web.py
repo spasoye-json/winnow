@@ -84,10 +84,12 @@ def create_app(db_path, client_secrets_path):
 
     @app.get("/", response_class=HTMLResponse)
     def feed(request: Request, channel: str | None = None,
-             since: str | None = None, until: str | None = None):
+             topic: str | None = None, since: str | None = None,
+             until: str | None = None):
         conn = connect(db_path)
         try:
-            context = build_feed(conn, channel=channel, since=since, until=until)
+            context = build_feed(conn, channel=channel, topic=topic,
+                                 since=since, until=until)
         finally:
             conn.close()
         return templates.TemplateResponse(request, "feed.html", context)
