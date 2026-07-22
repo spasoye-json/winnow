@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Literal
 
-from fastapi import FastAPI, Form, HTTPException, Request
+from fastapi import FastAPI, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -84,12 +84,13 @@ def create_app(db_path, client_secrets_path):
 
     @app.get("/", response_class=HTMLResponse)
     def feed(request: Request, channel: str | None = None,
-             topic: str | None = None, since: str | None = None,
-             until: str | None = None):
+             topic: str | None = None,
+             date_range: str = Query("all", alias="range"),
+             show_below: bool = Query(False)):
         conn = connect(db_path)
         try:
             context = build_feed(conn, channel=channel, topic=topic,
-                                 since=since, until=until)
+                                 date_range=date_range, show_below=show_below)
         finally:
             conn.close()
         return templates.TemplateResponse(request, "feed.html", context)

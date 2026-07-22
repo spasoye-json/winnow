@@ -1,5 +1,5 @@
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 DEFAULT_WEIGHTS = {
     "info_density": 0.25,
@@ -297,11 +297,22 @@ def effective_score(dims, weights):
     return sum(dims[d] * weights[d] for d in DIMENSIONS) / total
 
 
-def build_feed(conn, channel=None, topic=None, since=None, until=None):
+RANGE_DAYS = {"7": 7, "30": 30}
+
+DATE_RANGES = [
+    {"value": "7", "label": "Last 7 days"},
+    {"value": "30", "label": "Last 30 days"},
+    {"value": "all", "label": "All time"},
+]
+
+
+def build_feed(conn, channel=None, topic=None, date_range="all", show_below=False,
+               now=None):
     weights = load_weights(conn)
     threshold = load_threshold(conn)
-    query, params = _filtered_query(channel, topic, since, until)
-    feed, below, flagged, unscored = [], [], [], []
+    since = _range_since(date_range, now)
+    query, params = _filtered_query(channel, topic, since)
+    items, unscored = [], []
     for row in conn.execute(query, params).fetchall():
         (yt_id, title, thumbnail, status, channel_name, duration, published,
          views, *score_cols, verdict) = row
@@ -310,22 +321,19 @@ def build_feed(conn, channel=None, topic=None, since=None, until=None):
             unscored.append(_unscored_card(yt_id, title, thumbnail, channel_name,
                                            status, duration, published, views))
             continue
-        card = _scored_card(yt_id, title, thumbnail, channel_name, score_cols,
-                            weights, threshold, verdict, duration, published, views)
-        if card["hard_flags"]:
-            flagged.append(card)
-        elif card["passing"]:
-            feed.append(card)
-        else:
-            below.append(card)
-    feed.sort(key=lambda c: c["score"], reverse=True)
-    below.sort(key=lambda c: c["score"], reverse=True)
-    flagged.sort(key=lambda c: c["score"], reverse=True)
+        items.append(_scored_card(yt_id, title, thumbnail, channel_name, score_cols,
+                                  weights, threshold, verdict, duration, published,
+                                  views))
+    items.sort(key=lambda c: c["score"], reverse=True)
+    passing = [c for c in items if c["passing"]]
+    hidden_count = len(items) - len(passing)
     return {
         "threshold": threshold,
-        "feed": feed,
-        "below": below,
-        "flagged": flagged,
+        "threshold_display": f"{threshold:.1f}",
+        "items": items if show_below else passing,
+        "show_below": show_below,
+        "hidden_count": hidden_count,
+        "hidden_label": _hidden_label(hidden_count, threshold),
         "unscored": unscored,
         "channels": [
             {"yt_channel_id": cid, "name": name}
@@ -335,13 +343,27 @@ def build_feed(conn, channel=None, topic=None, since=None, until=None):
             {"id": tid, "query": topic_query}
             for tid, topic_query in conn.execute(SELECT_ACTIVE_TOPICS).fetchall()
         ],
+        "date_ranges": DATE_RANGES,
         "filters": {
-            "channel": channel, "topic": topic, "since": since, "until": until,
+            "channel": channel, "topic": topic, "range": date_range or "all",
         },
     }
 
 
-def _filtered_query(channel, topic, since, until):
+def _range_since(date_range, now):
+    days = RANGE_DAYS.get(date_range)
+    if days is None:
+        return None
+    now = now or datetime.now(UTC)
+    return (now - timedelta(days=days)).isoformat()
+
+
+def _hidden_label(count, threshold):
+    noun = "video" if count == 1 else "videos"
+    return f"{count} {noun} hidden below {threshold:.1f}"
+
+
+def _filtered_query(channel, topic, since):
     clauses, params = [], []
     if channel:
         clauses.append("c.yt_channel_id = ?")
@@ -350,11 +372,8 @@ def _filtered_query(channel, topic, since, until):
         clauses.append("v.topic_id = ?")
         params.append(topic)
     if since:
-        clauses.append("date(v.published_at) >= date(?)")
+        clauses.append("v.published_at >= ?")
         params.append(since)
-    if until:
-        clauses.append("date(v.published_at) <= date(?)")
-        params.append(until)
     query = SELECT_VIDEOS
     if clauses:
         query += "WHERE " + " AND ".join(clauses)
@@ -383,6 +402,7 @@ def _scored_card(yt_id, title, thumbnail, channel, score_cols, weights, threshol
         "score": score,
         "score_display": f"{score:.1f}",
         "hard_flags": hard_flags,
+        "auto_failed": ", ".join(hard_flags) if hard_flags else None,
         "passing": not hard_flags and score >= threshold,
         "metadata_only": conf is not None and conf < FULL_CONFIDENCE,
     }
