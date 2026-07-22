@@ -10,14 +10,47 @@
   border-bottom: 1px solid var(--pico-muted-border-color);
 }
 
+/* Widths mirror the vendored Pico classless body>main container rules. */
 .topnav-inner {
   display: flex;
   align-items: center;
   gap: 1.5rem;
-  max-width: var(--pico-container-max-width, 960px);
+  width: 100%;
   margin: 0 auto;
-  padding: 0 1rem;
+  padding: 0 var(--pico-block-spacing-horizontal);
   height: 56px;
+}
+
+@media (min-width: 576px) {
+  .topnav-inner {
+    max-width: 510px;
+    padding-right: 0;
+    padding-left: 0;
+  }
+}
+
+@media (min-width: 768px) {
+  .topnav-inner {
+    max-width: 700px;
+  }
+}
+
+@media (min-width: 1024px) {
+  .topnav-inner {
+    max-width: 950px;
+  }
+}
+
+@media (min-width: 1280px) {
+  .topnav-inner {
+    max-width: 1200px;
+  }
+}
+
+@media (min-width: 1536px) {
+  .topnav-inner {
+    max-width: 1450px;
+  }
 }
 
 .brand {
