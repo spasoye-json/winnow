@@ -105,13 +105,48 @@
   border-radius: var(--pico-border-radius);
 }
 
+.thumb {
+  position: relative;
+  display: block;
+}
+
+.duration-badge {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  background: rgba(20, 22, 24, 0.85);
+  color: #fff;
+  font-size: 0.7rem;
+  padding: 0.05rem 0.35rem;
+  border-radius: 3px;
+  font-variant-numeric: tabular-nums;
+}
+
+.card-meta {
+  font-size: 0.85rem;
+  color: var(--pico-muted-color);
+  margin: 0.2rem 0 0.5rem;
+}
+
+.external-link {
+  margin-left: 0.35rem;
+  font-size: 0.8rem;
+  color: var(--pico-muted-color);
+}
+
 .score-badge {
   display: inline-block;
   font-weight: 700;
   padding: 0.15rem 0.55rem;
   border-radius: var(--pico-border-radius);
-  background: var(--pico-primary-background);
-  color: var(--pico-primary-inverse);
+  background: var(--winnow-accent);
+  color: #fff;
+  font-variant-numeric: tabular-nums;
+}
+
+.score-badge.muted {
+  background: var(--pico-muted-border-color);
+  color: var(--pico-muted-color);
 }
 
 .marker {

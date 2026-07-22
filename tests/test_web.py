@@ -40,11 +40,14 @@ def _channel(conn, name, yt_channel_id):
 
 def _video(conn, yt_video_id, channel_id, *, title="A title",
            transcript_status="ok", thumbnail="https://i.ytimg.com/vi/x/hq.jpg",
-           published_at="2026-07-20T00:00:00+00:00"):
+           published_at="2026-07-20T00:00:00+00:00", duration_sec=None,
+           view_count=None):
     cur = conn.execute(
         "INSERT INTO videos (yt_video_id, channel_id, title, thumbnail_url, "
-        "transcript_status, published_at) VALUES (?, ?, ?, ?, ?, ?)",
-        (yt_video_id, channel_id, title, thumbnail, transcript_status, published_at),
+        "transcript_status, published_at, duration_sec, view_count) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (yt_video_id, channel_id, title, thumbnail, transcript_status, published_at,
+         duration_sec, view_count),
     )
     return cur.lastrowid
 
@@ -137,6 +140,61 @@ def test_feed_card_shows_all_fields(tmp_path):
     assert "https://i.ytimg.com/vi/x/hq.jpg" in body
     assert "https://www.youtube.com/watch?v=vid123" in body
     assert "8.0" in body
+
+
+def test_feed_card_shows_duration_meta_and_score_badge_state(tmp_path):
+    db_path = _seed_db(tmp_path)
+    conn = connect(str(db_path))
+    channel_id = _channel(conn, "Kilowatt Hour", "chan1")
+    high = _video(conn, "high", channel_id, title="Grid storage",
+                  duration_sec=1458, view_count=412000,
+                  published_at="2026-07-16T00:00:00+00:00")
+    low = _video(conn, "low", channel_id, title="Weaker take",
+                 duration_sec=305, view_count=1200,
+                 published_at="2026-07-10T00:00:00+00:00")
+    _score(conn, high, _flat(9.0), overall=9.0)
+    _score(conn, low, _flat(3.0), overall=3.0)
+    conn.commit()
+    conn.close()
+
+    body = _get(db_path).text
+    feed_section, below_section = body.split("Below threshold", 1)
+
+    assert "24:18" in feed_section
+    assert "5:05" in below_section
+    assert "Kilowatt Hour · Jul 16 · 412K views" in feed_section
+    assert 'class="score-badge">9.0' in feed_section
+    assert 'class="score-badge muted">3.0' in below_section
+
+
+def test_view_count_near_unit_boundary_promotes_to_next_unit(tmp_path):
+    db_path = _seed_db(tmp_path)
+    conn = connect(str(db_path))
+    channel_id = _channel(conn, "Chan", "chan1")
+    video_id = _video(conn, "edge", channel_id, title="Boundary views",
+                      view_count=999_600)
+    _score(conn, video_id, _flat(8.0), overall=8.0)
+    conn.commit()
+    conn.close()
+
+    body = _get(db_path).text
+    assert "1M views" in body
+    assert "1000K" not in body
+
+
+def test_feed_card_title_links_to_youtube_with_glyph_and_detail_reachable(tmp_path):
+    db_path = _seed_db(tmp_path)
+    conn = connect(str(db_path))
+    channel_id = _channel(conn, "Chan", "chan1")
+    video_id = _video(conn, "vid123", channel_id, title="Linked title")
+    _score(conn, video_id, _flat(8.0), overall=8.0)
+    conn.commit()
+    conn.close()
+
+    body = _get(db_path).text
+    assert '<a href="https://www.youtube.com/watch?v=vid123">Linked title</a>' in body
+    assert "↗" in body
+    assert "/video/vid123" in body
 
 
 def test_feed_ranks_above_threshold_by_effective_score(tmp_path):
