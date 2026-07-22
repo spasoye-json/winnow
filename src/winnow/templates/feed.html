@@ -20,12 +20,14 @@
   <div>
     <span class="score-badge{% if not card.passing %} muted{% endif %}">{{ card.score_display }}</span>
     {% if card.metadata_only %}<span class="marker">🛈 metadata-only</span>{% endif %}
-    {% for flag in card.hard_flags %}<span class="marker">⚑ {{ flag }}</span>{% endfor %}
     {{ card_title(card) }}
     {% if card.meta %}<p class="card-meta">{{ card.meta }}</p>{% endif %}
     <p>{{ card.summary }}</p>
     <a href="{{ card.detail_url }}">Why this score</a>
-    {{ verdict_buttons(card.verdict_url, card.verdict) }}
+    <div class="verdict-row">
+      {{ verdict_buttons(card.verdict_url, card.verdict) }}
+      {% if card.auto_failed %}<span class="auto-failed">Auto-failed: {{ card.auto_failed }}</span>{% endif %}
+    </div>
   </div>
 </article>
 {% endmacro %}
@@ -45,10 +47,10 @@
 {% block content %}
 <header>
   <h1>Winnow</h1>
-  <p>Videos above threshold {{ "%.1f"|format(threshold) }}, ranked by quality.</p>
+  <p>Videos above threshold {{ threshold_display }}, ranked by quality.</p>
 </header>
 
-<form method="get" role="search">
+<form method="get" role="search" class="filter-bar">
   <select name="channel" aria-label="Channel">
     <option value="">All channels</option>
     {% for ch in channels %}
@@ -67,11 +69,21 @@
     </option>
     {% endfor %}
   </select>
-  <input type="date" name="since" aria-label="Published since"
-         value="{{ filters.since or '' }}" />
-  <input type="date" name="until" aria-label="Published until"
-         value="{{ filters.until or '' }}" />
+  <select name="range" aria-label="Date range">
+    {% for r in date_ranges %}
+    <option value="{{ r.value }}"
+            {% if r.value == filters.range %}selected{% endif %}>
+      {{ r.label }}
+    </option>
+    {% endfor %}
+  </select>
+  <label class="show-below">
+    <input type="checkbox" name="show_below" value="1"
+           {% if show_below %}checked{% endif %} />
+    Show below threshold
+  </label>
   <button type="submit">Filter</button>
+  <span class="hidden-count">{{ hidden_label }}</span>
 </form>
 
 <aside>
@@ -82,30 +94,13 @@
   </p>
 </aside>
 
-{% if feed %}
+{% if items %}
 <section>
-  <h2>Feed</h2>
-  {% for card in feed %}{{ scored_card(card) }}{% endfor %}
+  {% for card in items %}{{ scored_card(card) }}{% endfor %}
 </section>
 {% else %}
 <section>
-  <h2>Feed</h2>
-  <p>Nothing above threshold yet.</p>
-</section>
-{% endif %}
-
-{% if below %}
-<section>
-  <h2>Below threshold</h2>
-  {% for card in below %}{{ scored_card(card) }}{% endfor %}
-</section>
-{% endif %}
-
-{% if flagged %}
-<section>
-  <h2>Hard-flagged</h2>
-  <p>Excluded from the feed regardless of score.</p>
-  {% for card in flagged %}{{ scored_card(card) }}{% endfor %}
+  <p>No videos match these filters.</p>
 </section>
 {% endif %}
 

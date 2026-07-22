@@ -1,4 +1,5 @@
 import json
+from datetime import UTC, datetime, timedelta
 
 from fastapi.testclient import TestClient
 
@@ -70,6 +71,10 @@ def _score(conn, video_id, dims, *, overall=0.0, hard_flags=None, summary="A sum
 
 def _flat(value):
     return {d: value for d in DIMENSIONS}
+
+
+def _days_ago(days):
+    return (datetime.now(UTC) - timedelta(days=days)).isoformat()
 
 
 def _set_setting(conn, key, value):
@@ -157,14 +162,14 @@ def test_feed_card_shows_duration_meta_and_score_badge_state(tmp_path):
     conn.commit()
     conn.close()
 
-    body = _get(db_path).text
-    feed_section, below_section = body.split("Below threshold", 1)
+    body = _get(db_path, {"show_below": "1"}).text
 
-    assert "24:18" in feed_section
-    assert "5:05" in below_section
-    assert "Kilowatt Hour · Jul 16 · 412K views" in feed_section
-    assert 'class="score-badge">9.0' in feed_section
-    assert 'class="score-badge muted">3.0' in below_section
+    assert "24:18" in body
+    assert "5:05" in body
+    assert "Kilowatt Hour · Jul 16 · 412K views" in body
+    assert 'class="score-badge">9.0' in body
+    assert 'class="score-badge muted">3.0' in body
+    assert body.index("Grid storage") < body.index("Weaker take")
 
 
 def test_view_count_near_unit_boundary_promotes_to_next_unit(tmp_path):
@@ -272,10 +277,12 @@ def test_weights_change_moves_video_below_threshold(tmp_path):
     conn.commit()
     conn.close()
 
-    body = _get(db_path).text
-    assert "Below threshold" in body
-    below = body.split("Below threshold", 1)[1]
-    assert "Weight sensitive" in below
+    default = _get(db_path).text
+    assert "Weight sensitive" not in default
+    assert "1 video hidden below 6.0" in default
+
+    revealed = _get(db_path, {"show_below": "1"}).text
+    assert "Weight sensitive" in revealed
 
 
 def test_threshold_setting_controls_feed(tmp_path):
@@ -288,9 +295,12 @@ def test_threshold_setting_controls_feed(tmp_path):
     conn.commit()
     conn.close()
 
-    body = _get(db_path).text
-    below = body.split("Below threshold", 1)[1]
-    assert "Middling" in below
+    default = _get(db_path).text
+    assert "Middling" not in default
+    assert "1 video hidden below 8.0" in default
+
+    revealed = _get(db_path, {"show_below": "1"}).text
+    assert "Middling" in revealed
 
 
 def test_hard_flagged_excluded_from_main_feed(tmp_path):
@@ -304,11 +314,12 @@ def test_hard_flagged_excluded_from_main_feed(tmp_path):
     conn.commit()
     conn.close()
 
-    body = _get(db_path).text
-    feed_section = body.split("Below threshold")[0].split("Hard-flagged")[0]
-    assert "Clean high scorer" in feed_section
-    assert "Flagged high scorer" not in feed_section
-    assert "Flagged high scorer" in body
+    default = _get(db_path).text
+    assert "Clean high scorer" in default
+    assert "Flagged high scorer" not in default
+
+    revealed = _get(db_path, {"show_below": "1"}).text
+    assert "Flagged high scorer" in revealed
 
 
 def test_unscored_section_lists_pending_and_failures(tmp_path):
@@ -519,54 +530,168 @@ def test_filter_form_lists_topics(tmp_path):
     assert f'value="{solar}"' in body
 
 
-def test_feed_filters_by_since_date(tmp_path):
+def test_date_range_select_offers_seven_thirty_and_all_time(tmp_path):
+    db_path = _seed_db(tmp_path)
+    body = _get(db_path).text
+    assert 'name="range"' in body
+    assert "Last 7 days" in body
+    assert "Last 30 days" in body
+    assert "All time" in body
+
+
+def test_feed_range_last_7_days_excludes_older_videos(tmp_path):
     db_path = _seed_db(tmp_path)
     conn = connect(str(db_path))
     channel_id = _channel(conn, "Chan", "chan1")
     old = _video(conn, "old", channel_id, title="Old video",
-                 published_at="2026-07-01T00:00:00+00:00")
+                 published_at=_days_ago(20))
     new = _video(conn, "new", channel_id, title="New video",
-                 published_at="2026-07-20T00:00:00+00:00")
+                 published_at=_days_ago(2))
     _score(conn, old, _flat(8.0), overall=8.0)
     _score(conn, new, _flat(8.0), overall=8.0)
     conn.commit()
     conn.close()
 
-    body = _get(db_path, {"since": "2026-07-10"}).text
+    body = _get(db_path, {"range": "7"}).text
     assert "New video" in body
     assert "Old video" not in body
 
 
-def test_feed_filters_by_until_date(tmp_path):
+def test_feed_range_last_30_days_includes_recent_but_not_ancient(tmp_path):
+    db_path = _seed_db(tmp_path)
+    conn = connect(str(db_path))
+    channel_id = _channel(conn, "Chan", "chan1")
+    recent = _video(conn, "recent", channel_id, title="Recent video",
+                    published_at=_days_ago(20))
+    ancient = _video(conn, "ancient", channel_id, title="Ancient video",
+                     published_at=_days_ago(200))
+    _score(conn, recent, _flat(8.0), overall=8.0)
+    _score(conn, ancient, _flat(8.0), overall=8.0)
+    conn.commit()
+    conn.close()
+
+    body = _get(db_path, {"range": "30"}).text
+    assert "Recent video" in body
+    assert "Ancient video" not in body
+
+
+def test_feed_range_all_time_keeps_every_video(tmp_path):
     db_path = _seed_db(tmp_path)
     conn = connect(str(db_path))
     channel_id = _channel(conn, "Chan", "chan1")
     old = _video(conn, "old", channel_id, title="Old video",
-                 published_at="2026-07-01T00:00:00+00:00")
+                 published_at=_days_ago(400))
     new = _video(conn, "new", channel_id, title="New video",
-                 published_at="2026-07-20T00:00:00+00:00")
+                 published_at=_days_ago(1))
     _score(conn, old, _flat(8.0), overall=8.0)
     _score(conn, new, _flat(8.0), overall=8.0)
     conn.commit()
     conn.close()
 
-    body = _get(db_path, {"until": "2026-07-10"}).text
+    body = _get(db_path, {"range": "all"}).text
     assert "Old video" in body
-    assert "New video" not in body
+    assert "New video" in body
 
 
-def test_until_date_is_inclusive_of_the_whole_day(tmp_path):
+def test_unknown_range_value_falls_back_to_all_time(tmp_path):
     db_path = _seed_db(tmp_path)
     conn = connect(str(db_path))
     channel_id = _channel(conn, "Chan", "chan1")
-    same_day = _video(conn, "same", channel_id, title="Same day video",
-                      published_at="2026-07-10T18:30:00+00:00")
-    _score(conn, same_day, _flat(8.0), overall=8.0)
+    old = _video(conn, "old", channel_id, title="Old video",
+                 published_at=_days_ago(400))
+    _score(conn, old, _flat(8.0), overall=8.0)
     conn.commit()
     conn.close()
 
-    body = _get(db_path, {"until": "2026-07-10"}).text
-    assert "Same day video" in body
+    body = _get(db_path, {"range": "bogus"}).text
+    assert "Old video" in body
+    select = body.split('name="range"', 1)[1].split("</select>", 1)[0]
+    all_option = select.split('value="all"', 1)[1].split(">", 1)[0]
+    assert "selected" in all_option
+
+
+def test_show_below_checkbox_defaults_off(tmp_path):
+    db_path = _seed_db(tmp_path)
+    conn = connect(str(db_path))
+    channel_id = _channel(conn, "Chan", "chan1")
+    _score(conn, _video(conn, "vid", channel_id, title="Passing"), _flat(8.0),
+           overall=8.0)
+    conn.commit()
+    conn.close()
+
+    body = _get(db_path).text
+    checkbox = body.split('name="show_below"', 1)[1].split(">", 1)[0]
+    assert "checked" not in checkbox
+
+
+def test_hidden_count_reads_videos_hidden_below_threshold(tmp_path):
+    db_path = _seed_db(tmp_path)
+    conn = connect(str(db_path))
+    channel_id = _channel(conn, "Chan", "chan1")
+    _score(conn, _video(conn, "pass", channel_id, title="Passing"), _flat(8.0),
+           overall=8.0)
+    _score(conn, _video(conn, "low1", channel_id, title="Low one"), _flat(3.0),
+           overall=3.0)
+    _score(conn, _video(conn, "low2", channel_id, title="Low two"), _flat(2.0),
+           overall=2.0)
+    conn.commit()
+    conn.close()
+
+    body = _get(db_path).text
+    assert "2 videos hidden below 6.0" in body
+
+
+def test_hidden_count_is_singular_for_one_hidden_video(tmp_path):
+    db_path = _seed_db(tmp_path)
+    conn = connect(str(db_path))
+    channel_id = _channel(conn, "Chan", "chan1")
+    _score(conn, _video(conn, "low", channel_id, title="Low one"), _flat(3.0),
+           overall=3.0)
+    conn.commit()
+    conn.close()
+
+    body = _get(db_path).text
+    assert "1 video hidden below 6.0" in body
+
+
+def test_toggle_reveals_below_and_flagged_inline_in_rank_order(tmp_path):
+    db_path = _seed_db(tmp_path)
+    conn = connect(str(db_path))
+    channel_id = _channel(conn, "Chan", "chan1")
+    _score(conn, _video(conn, "high", channel_id, title="High passing"),
+           _flat(9.0), overall=9.0)
+    _score(conn, _video(conn, "mid", channel_id, title="Mid passing"),
+           _flat(7.0), overall=7.0)
+    _score(conn, _video(conn, "low", channel_id, title="Low below"),
+           _flat(4.0), overall=4.0)
+    _score(conn, _video(conn, "flag", channel_id, title="Flagged top"),
+           _flat(9.5), overall=9.5, hard_flags=["ai_voice"])
+    conn.commit()
+    conn.close()
+
+    default = _get(db_path).text
+    assert "Low below" not in default
+    assert "Flagged top" not in default
+
+    body = _get(db_path, {"show_below": "1"}).text
+    order = [body.index(t) for t in
+             ("Flagged top", "High passing", "Mid passing", "Low below")]
+    assert order == sorted(order)
+
+
+def test_revealed_hard_flagged_row_shows_auto_failed_note(tmp_path):
+    db_path = _seed_db(tmp_path)
+    conn = connect(str(db_path))
+    channel_id = _channel(conn, "Chan", "chan1")
+    _score(conn, _video(conn, "flag", channel_id, title="Flagged one"),
+           _flat(9.0), overall=9.0, hard_flags=["ai_voice"])
+    conn.commit()
+    conn.close()
+
+    body = _get(db_path, {"show_below": "1"}).text
+    card = body.split("Flagged one", 1)[1]
+    note = card.split("Auto-failed", 1)[1].split("</span>", 1)[0]
+    assert "ai_voice" in note
 
 
 def test_filters_compose_with_threshold_and_ranking(tmp_path):
@@ -588,15 +713,14 @@ def test_filters_compose_with_threshold_and_ranking(tmp_path):
 
     body = _get(db_path, {"channel": "chanA"}).text
     assert "Beta other" not in body
+    assert "Alpha high" in body
+    assert "Alpha mid" in body
+    assert "Alpha low" not in body
+    assert body.index("Alpha high") < body.index("Alpha mid")
 
-    feed_section = body.split("Below threshold", 1)[0]
-    assert "Alpha high" in feed_section
-    assert "Alpha mid" in feed_section
-    assert "Alpha low" not in feed_section
-    assert feed_section.index("Alpha high") < feed_section.index("Alpha mid")
-
-    below = body.split("Below threshold", 1)[1]
-    assert "Alpha low" in below
+    revealed = _get(db_path, {"channel": "chanA", "show_below": "1"}).text
+    assert "Alpha low" in revealed
+    assert "Beta other" not in revealed
 
 
 def test_empty_filter_params_return_unfiltered_feed(tmp_path):
@@ -608,7 +732,7 @@ def test_empty_filter_params_return_unfiltered_feed(tmp_path):
     conn.commit()
     conn.close()
 
-    body = _get(db_path, {"channel": "", "since": "", "until": ""}).text
+    body = _get(db_path, {"channel": "", "range": "", "show_below": ""}).text
     assert "Unfiltered video" in body
 
 
@@ -624,8 +748,8 @@ def test_filter_form_lists_channels(tmp_path):
 
     body = _get(db_path).text
     assert 'name="channel"' in body
-    assert 'name="since"' in body
-    assert 'name="until"' in body
+    assert 'name="range"' in body
+    assert 'name="show_below"' in body
     assert 'value="chanA"' in body
     assert 'value="chanB"' in body
 
@@ -854,7 +978,7 @@ def test_settings_change_reranks_feed_instantly_without_rescoring(tmp_path):
     conn.close()
 
     before = _get(db_path).text
-    assert "Weight sensitive" in before.split("Below threshold")[0]
+    assert "Weight sensitive" in before
 
     scores_before = _score_count(db_path)
     _post_settings(db_path, {
@@ -865,8 +989,10 @@ def test_settings_change_reranks_feed_instantly_without_rescoring(tmp_path):
     assert _score_count(db_path) == scores_before
 
     after = _get(db_path).text
-    below = after.split("Below threshold", 1)[1]
-    assert "Weight sensitive" in below
+    assert "Weight sensitive" not in after
+
+    revealed = _get(db_path, {"show_below": "1"}).text
+    assert "Weight sensitive" in revealed
 
 
 def test_settings_form_rejects_out_of_range_values(tmp_path):
