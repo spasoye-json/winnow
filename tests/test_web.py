@@ -850,6 +850,12 @@ def _post(db_path, path, data=None):
         return client.post(path, data=data or {})
 
 
+def _post_no_redirect(db_path, path, data=None):
+    app = create_app(str(db_path), str(db_path.parent / "missing_secrets.json"))
+    with TestClient(app) as client:
+        return client.post(path, data=data or {}, follow_redirects=False)
+
+
 def test_settings_lists_channels_with_excluded_and_exempt_checkboxes(tmp_path):
     db_path = _seed_db(tmp_path)
     conn = connect(str(db_path))
@@ -885,6 +891,56 @@ def test_settings_toggles_channel_excluded_and_exempt(tmp_path):
         "WHERE yt_channel_id = 'chan1'").fetchone()
     conn.close()
     assert row == (0, 0)
+
+
+def test_settings_channel_toggles_are_plain_form_posts_without_htmx(tmp_path):
+    db_path = _seed_db(tmp_path)
+    conn = connect(str(db_path))
+    _settings_channel(conn, "Deep Dives", "chan1")
+    conn.close()
+
+    body = _get_settings(db_path).text
+    assert 'hx-post' not in body
+    assert 'hx-trigger' not in body
+    assert '<form method="post" action="/settings/channels/chan1"' in body
+
+
+def test_settings_channel_excluded_toggle_form_post_reloads(tmp_path):
+    db_path = _seed_db(tmp_path)
+    conn = connect(str(db_path))
+    _settings_channel(conn, "Chan", "chan1")
+    conn.close()
+
+    response = _post_no_redirect(db_path, "/settings/channels/chan1",
+                                 {"excluded": "1"})
+    assert response.status_code == 303
+    assert response.headers["location"] == "/settings"
+
+    conn = connect(str(db_path))
+    row = conn.execute(
+        "SELECT excluded, exempt_low_transcript FROM channels "
+        "WHERE yt_channel_id = 'chan1'").fetchone()
+    conn.close()
+    assert row == (1, 0)
+
+
+def test_settings_channel_exempt_toggle_form_post_reloads(tmp_path):
+    db_path = _seed_db(tmp_path)
+    conn = connect(str(db_path))
+    _settings_channel(conn, "Chan", "chan1")
+    conn.close()
+
+    response = _post_no_redirect(db_path, "/settings/channels/chan1",
+                                 {"exempt": "1"})
+    assert response.status_code == 303
+    assert response.headers["location"] == "/settings"
+
+    conn = connect(str(db_path))
+    row = conn.execute(
+        "SELECT excluded, exempt_low_transcript FROM channels "
+        "WHERE yt_channel_id = 'chan1'").fetchone()
+    conn.close()
+    assert row == (0, 1)
 
 
 def test_settings_adds_manual_channel(tmp_path):
