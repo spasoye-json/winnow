@@ -167,6 +167,21 @@ def test_feed_card_shows_duration_meta_and_score_badge_state(tmp_path):
     assert 'class="score-badge muted">3.0' in below_section
 
 
+def test_view_count_near_unit_boundary_promotes_to_next_unit(tmp_path):
+    db_path = _seed_db(tmp_path)
+    conn = connect(str(db_path))
+    channel_id = _channel(conn, "Chan", "chan1")
+    video_id = _video(conn, "edge", channel_id, title="Boundary views",
+                      view_count=999_600)
+    _score(conn, video_id, _flat(8.0), overall=8.0)
+    conn.commit()
+    conn.close()
+
+    body = _get(db_path).text
+    assert "1M views" in body
+    assert "1000K" not in body
+
+
 def test_feed_card_title_links_to_youtube_with_glyph_and_detail_reachable(tmp_path):
     db_path = _seed_db(tmp_path)
     conn = connect(str(db_path))

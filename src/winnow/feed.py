@@ -311,15 +311,12 @@ def build_feed(conn, channel=None, topic=None, since=None, until=None):
                                            status, duration, published, views))
             continue
         card = _scored_card(yt_id, title, thumbnail, channel_name, score_cols,
-                            weights, verdict, duration, published, views)
+                            weights, threshold, verdict, duration, published, views)
         if card["hard_flags"]:
-            card["passing"] = False
             flagged.append(card)
-        elif card["score"] >= threshold:
-            card["passing"] = True
+        elif card["passing"]:
             feed.append(card)
         else:
-            card["passing"] = False
             below.append(card)
     feed.sort(key=lambda c: c["score"], reverse=True)
     below.sort(key=lambda c: c["score"], reverse=True)
@@ -364,14 +361,15 @@ def _filtered_query(channel, topic, since, until):
     return query + SELECT_VIDEOS_ORDER, params
 
 
-def _scored_card(yt_id, title, thumbnail, channel, score_cols, weights, verdict,
-                 duration, published, views):
+def _scored_card(yt_id, title, thumbnail, channel, score_cols, weights, threshold,
+                 verdict, duration, published, views):
     (info, orig, click, pad, depth, prod, summary, flags_json, conf) = score_cols
     dims = {
         "info_density": info, "originality": orig, "clickbait_gap": click,
         "padding": pad, "depth": depth, "production": prod,
     }
     score = effective_score(dims, weights)
+    hard_flags = json.loads(flags_json) if flags_json else []
     return {
         "youtube_url": YOUTUBE_WATCH_URL + yt_id,
         "detail_url": f"/video/{yt_id}",
@@ -379,13 +377,13 @@ def _scored_card(yt_id, title, thumbnail, channel, score_cols, weights, verdict,
         "verdict": verdict,
         "title": title,
         "thumbnail_url": thumbnail,
-        "channel": channel,
         "meta": _meta_line(channel, published, views),
         "duration_display": _format_duration(duration),
         "summary": summary,
         "score": score,
         "score_display": f"{score:.1f}",
-        "hard_flags": json.loads(flags_json) if flags_json else [],
+        "hard_flags": hard_flags,
+        "passing": not hard_flags and score >= threshold,
         "metadata_only": conf is not None and conf < FULL_CONFIDENCE,
     }
 
@@ -397,7 +395,6 @@ def _unscored_card(yt_id, title, thumbnail, channel, status, duration, published
         "detail_url": f"/video/{yt_id}",
         "title": title,
         "thumbnail_url": thumbnail,
-        "channel": channel,
         "meta": _meta_line(channel, published, views),
         "duration_display": _format_duration(duration),
         "reason": UNSCORED_REASONS.get(status, status),
@@ -437,13 +434,16 @@ def _format_date(published):
 def _format_views(views):
     if views is None:
         return None
-    for divisor, suffix in ((1_000_000_000, "B"), (1_000_000, "M"), (1_000, "K")):
-        if views >= divisor:
-            value = views / divisor
-            if value >= 100:
-                return f"{value:.0f}{suffix}"
-            return f"{value:.1f}".rstrip("0").rstrip(".") + suffix
-    return str(views)
+    if views < 1_000:
+        return str(views)
+    for divisor, suffix in ((1_000, "K"), (1_000_000, "M"), (1_000_000_000, "B")):
+        value = views / divisor
+        # 999.5 and up would render as 1000; promote to the next unit instead
+        if value >= 999.5 and suffix != "B":
+            continue
+        if value >= 100:
+            return f"{value:.0f}{suffix}"
+        return f"{value:.1f}".rstrip("0").rstrip(".") + suffix
 
 
 def build_detail(conn, yt_video_id):
