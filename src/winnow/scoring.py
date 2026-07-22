@@ -29,6 +29,7 @@ MAX_BACKOFF_SEC = 60
 MAX_UNKNOWN_ATTEMPTS = 2
 
 PACING_SEC = 10
+TRANSCRIPT_PACING_SEC = 3
 DAILY_CAP = 200
 PACIFIC = ZoneInfo("America/Los_Angeles")
 
@@ -207,6 +208,7 @@ def run_scoring(conn, fetch_transcript, llm, model, now=None, sleep=time.sleep,
     pending = conn.execute(SELECT_PENDING).fetchall()
     consecutive_rate_limits = 0
     made_call = False
+    fetched = False
 
     def record_request():
         nonlocal count
@@ -224,7 +226,10 @@ def run_scoring(conn, fetch_transcript, llm, model, now=None, sleep=time.sleep,
          exempt) in pending:
         if count >= DAILY_CAP:
             break
+        if fetched:
+            sleep(TRANSCRIPT_PACING_SEC)
         transcript, failure = _fetch(fetch_transcript, yt_video_id, sleep)
+        fetched = True
         if failure is FailureClass.IP_BLOCK:
             break
         plan = _transcript_plan(conn, failure, transcript, video_id, attempts)
