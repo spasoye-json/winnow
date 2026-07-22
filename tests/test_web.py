@@ -593,6 +593,23 @@ def test_feed_range_all_time_keeps_every_video(tmp_path):
     assert "New video" in body
 
 
+def test_unknown_range_value_falls_back_to_all_time(tmp_path):
+    db_path = _seed_db(tmp_path)
+    conn = connect(str(db_path))
+    channel_id = _channel(conn, "Chan", "chan1")
+    old = _video(conn, "old", channel_id, title="Old video",
+                 published_at=_days_ago(400))
+    _score(conn, old, _flat(8.0), overall=8.0)
+    conn.commit()
+    conn.close()
+
+    body = _get(db_path, {"range": "bogus"}).text
+    assert "Old video" in body
+    select = body.split('name="range"', 1)[1].split("</select>", 1)[0]
+    all_option = select.split('value="all"', 1)[1].split(">", 1)[0]
+    assert "selected" in all_option
+
+
 def test_show_below_checkbox_defaults_off(tmp_path):
     db_path = _seed_db(tmp_path)
     conn = connect(str(db_path))
@@ -715,7 +732,7 @@ def test_empty_filter_params_return_unfiltered_feed(tmp_path):
     conn.commit()
     conn.close()
 
-    body = _get(db_path, {"channel": "", "range": ""}).text
+    body = _get(db_path, {"channel": "", "range": "", "show_below": ""}).text
     assert "Unfiltered video" in body
 
 

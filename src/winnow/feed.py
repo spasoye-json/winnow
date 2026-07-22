@@ -310,6 +310,8 @@ def build_feed(conn, channel=None, topic=None, date_range="all", show_below=Fals
                now=None):
     weights = load_weights(conn)
     threshold = load_threshold(conn)
+    if date_range not in RANGE_DAYS:
+        date_range = "all"
     since = _range_since(date_range, now)
     query, params = _filtered_query(channel, topic, since)
     items, unscored = [], []
@@ -328,7 +330,6 @@ def build_feed(conn, channel=None, topic=None, date_range="all", show_below=Fals
     passing = [c for c in items if c["passing"]]
     hidden_count = len(items) - len(passing)
     return {
-        "threshold": threshold,
         "threshold_display": f"{threshold:.1f}",
         "items": items if show_below else passing,
         "show_below": show_below,
@@ -345,7 +346,7 @@ def build_feed(conn, channel=None, topic=None, date_range="all", show_below=Fals
         ],
         "date_ranges": DATE_RANGES,
         "filters": {
-            "channel": channel, "topic": topic, "range": date_range or "all",
+            "channel": channel, "topic": topic, "range": date_range,
         },
     }
 

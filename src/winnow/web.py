@@ -86,11 +86,12 @@ def create_app(db_path, client_secrets_path):
     def feed(request: Request, channel: str | None = None,
              topic: str | None = None,
              date_range: str = Query("all", alias="range"),
-             show_below: bool = Query(False)):
+             show_below: str = Query("")):
         conn = connect(db_path)
         try:
             context = build_feed(conn, channel=channel, topic=topic,
-                                 date_range=date_range, show_below=show_below)
+                                 date_range=date_range,
+                                 show_below=show_below == "1")
         finally:
             conn.close()
         return templates.TemplateResponse(request, "feed.html", context)
