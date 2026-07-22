@@ -24,13 +24,13 @@
     <span>Excluded</span>
     <span>Exempt low-transcript</span>
     <span></span>
+    <span></span>
   </div>
   {% for c in channels %}
   <div class="channel-row">
     <span>{{ c.name }}</span>
     <span>{{ c.source }}</span>
-    <form hx-post="{{ c.toggle_url }}" hx-trigger="change" hx-swap="none"
-          class="channel-flags">
+    <form method="post" action="{{ c.toggle_url }}" class="channel-flags">
       <label>
         <input type="checkbox" name="excluded" value="1"
                {% if c.excluded %}checked{% endif %} />
@@ -41,6 +41,7 @@
                {% if c.exempt %}checked{% endif %} />
         <span class="sr-only">Exempt low-transcript</span>
       </label>
+      <button type="submit" class="secondary">Apply</button>
     </form>
     {% if c.removable %}
     <form method="post" action="{{ c.remove_url }}">

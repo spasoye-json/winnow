@@ -55,7 +55,7 @@
 
 .channel-row {
   display: grid;
-  grid-template-columns: 1fr 120px 90px 160px 100px;
+  grid-template-columns: 1fr 120px 90px 160px 100px 100px;
   gap: 1rem;
   align-items: center;
   padding: 0.5rem 0;
@@ -70,9 +70,11 @@
 }
 
 .channel-flags {
-  grid-column: 3 / 5;
-  display: flex;
-  gap: 4.5rem;
+  grid-column: 3 / 6;
+  display: grid;
+  grid-template-columns: 90px 160px 100px;
+  gap: 1rem;
+  align-items: center;
   margin: 0;
 }
 

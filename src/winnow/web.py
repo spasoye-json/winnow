@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Literal
 
-from fastapi import FastAPI, Form, HTTPException, Request, Response
+from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -157,7 +157,7 @@ def create_app(db_path, client_secrets_path):
             set_channel_flags(conn, yt_channel_id, excluded, exempt)
         finally:
             conn.close()
-        return Response(status_code=204)
+        return RedirectResponse("/settings", status_code=303)
 
     @app.post("/settings/channels/{yt_channel_id}/remove")
     def deactivate_channel(yt_channel_id: str):
