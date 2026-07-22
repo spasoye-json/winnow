@@ -59,7 +59,7 @@
 
 <footer class="detail-footer">
   {{ verdict_buttons(verdict_url, verdict) }}
-  <span class="scoring-meta">{{ model }} &middot; prompt v{{ prompt_version }} &middot; scored {{ scored_display }}</span>
+  <span class="scoring-meta">{{ model }} &middot; prompt v{{ prompt_version }}{% if scored_display %} &middot; scored {{ scored_display }}{% endif %}</span>
 </footer>
 {% endif %}
 {% endblock %}

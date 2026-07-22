@@ -506,6 +506,7 @@ def test_detail_hard_flag_banner_is_amber(tmp_path):
     assert "hard-flag-banner" in body
     assert "Hard flag: ai_voice" in body
     assert "auto-failed regardless" in body
+    assert "overall muted" in body
 
 
 def test_detail_breakdown_weights_are_percents_and_bars_colored_by_threshold(tmp_path):
@@ -544,6 +545,21 @@ def test_detail_footer_has_verdict_buttons_and_scoring_metadata_with_date(tmp_pa
     assert "gemini-3.1-flash-lite" in body
     assert "prompt v1" in body
     assert "scored Jul 20" in body
+
+
+def test_detail_footer_omits_scored_date_when_absent(tmp_path):
+    db_path = _seed_db(tmp_path)
+    conn = connect(str(db_path))
+    channel_id = _channel(conn, "Chan", "chan1")
+    video_id = _video(conn, "vid", channel_id, title="Dateless")
+    _score(conn, video_id, _flat(8.0), overall=8.0, scored_at=None)
+    conn.commit()
+    conn.close()
+
+    body = _get_detail(db_path, "vid").text
+    assert "scoring-meta" in body
+    assert "prompt v1" in body
+    assert "scored None" not in body
 
 
 def test_feed_filters_by_channel(tmp_path):
