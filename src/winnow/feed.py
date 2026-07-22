@@ -37,6 +37,7 @@ VERDICT_COLUMN = """
 
 SELECT_VIDEOS = f"""
 SELECT v.yt_video_id, v.title, v.thumbnail_url, v.transcript_status, c.name,
+       v.duration_sec, v.published_at, v.view_count,
        s.info_density, s.originality, s.clickbait_gap, s.padding, s.depth,
        s.production, s.summary, s.hard_flags, s.confidence,{VERDICT_COLUMN}
 FROM videos v
@@ -302,19 +303,23 @@ def build_feed(conn, channel=None, topic=None, since=None, until=None):
     query, params = _filtered_query(channel, topic, since, until)
     feed, below, flagged, unscored = [], [], [], []
     for row in conn.execute(query, params).fetchall():
-        (yt_id, title, thumbnail, status, channel_name, *score_cols, verdict) = row
+        (yt_id, title, thumbnail, status, channel_name, duration, published,
+         views, *score_cols, verdict) = row
         info = score_cols[0]
         if info is None:
-            unscored.append(
-                _unscored_card(yt_id, title, thumbnail, channel_name, status))
+            unscored.append(_unscored_card(yt_id, title, thumbnail, channel_name,
+                                           status, duration, published, views))
             continue
         card = _scored_card(yt_id, title, thumbnail, channel_name, score_cols,
-                            weights, verdict)
+                            weights, verdict, duration, published, views)
         if card["hard_flags"]:
+            card["passing"] = False
             flagged.append(card)
         elif card["score"] >= threshold:
+            card["passing"] = True
             feed.append(card)
         else:
+            card["passing"] = False
             below.append(card)
     feed.sort(key=lambda c: c["score"], reverse=True)
     below.sort(key=lambda c: c["score"], reverse=True)
@@ -359,7 +364,8 @@ def _filtered_query(channel, topic, since, until):
     return query + SELECT_VIDEOS_ORDER, params
 
 
-def _scored_card(yt_id, title, thumbnail, channel, score_cols, weights, verdict):
+def _scored_card(yt_id, title, thumbnail, channel, score_cols, weights, verdict,
+                 duration, published, views):
     (info, orig, click, pad, depth, prod, summary, flags_json, conf) = score_cols
     dims = {
         "info_density": info, "originality": orig, "clickbait_gap": click,
@@ -374,6 +380,8 @@ def _scored_card(yt_id, title, thumbnail, channel, score_cols, weights, verdict)
         "title": title,
         "thumbnail_url": thumbnail,
         "channel": channel,
+        "meta": _meta_line(channel, published, views),
+        "duration_display": _format_duration(duration),
         "summary": summary,
         "score": score,
         "score_display": f"{score:.1f}",
@@ -382,15 +390,60 @@ def _scored_card(yt_id, title, thumbnail, channel, score_cols, weights, verdict)
     }
 
 
-def _unscored_card(yt_id, title, thumbnail, channel, status):
+def _unscored_card(yt_id, title, thumbnail, channel, status, duration, published,
+                   views):
     return {
         "youtube_url": YOUTUBE_WATCH_URL + yt_id,
         "detail_url": f"/video/{yt_id}",
         "title": title,
         "thumbnail_url": thumbnail,
         "channel": channel,
+        "meta": _meta_line(channel, published, views),
+        "duration_display": _format_duration(duration),
         "reason": UNSCORED_REASONS.get(status, status),
     }
+
+
+def _meta_line(channel, published, views):
+    parts = []
+    if channel:
+        parts.append(channel)
+    date = _format_date(published)
+    if date:
+        parts.append(date)
+    view_label = _format_views(views)
+    if view_label is not None:
+        parts.append(f"{view_label} views")
+    return " · ".join(parts)
+
+
+def _format_duration(seconds):
+    if seconds is None:
+        return None
+    hours, rest = divmod(int(seconds), 3600)
+    minutes, secs = divmod(rest, 60)
+    if hours:
+        return f"{hours}:{minutes:02d}:{secs:02d}"
+    return f"{minutes}:{secs:02d}"
+
+
+def _format_date(published):
+    if not published:
+        return None
+    parsed = datetime.fromisoformat(published)
+    return f"{parsed:%b} {parsed.day}"
+
+
+def _format_views(views):
+    if views is None:
+        return None
+    for divisor, suffix in ((1_000_000_000, "B"), (1_000_000, "M"), (1_000, "K")):
+        if views >= divisor:
+            value = views / divisor
+            if value >= 100:
+                return f"{value:.0f}{suffix}"
+            return f"{value:.1f}".rstrip("0").rstrip(".") + suffix
+    return str(views)
 
 
 def build_detail(conn, yt_video_id):
