@@ -1335,3 +1335,53 @@ def test_feed_links_to_calibration(tmp_path):
     db_path = _seed_db(tmp_path)
     body = _get(db_path).text
     assert 'href="/calibration"' in body
+
+
+def _nav_link(body, label):
+    marker = f">{label}</a>"
+    assert marker in body
+    return body.split(marker, 1)[0].rsplit("<a ", 1)[1]
+
+
+def test_feed_has_sticky_nav_with_feed_active(tmp_path):
+    db_path = _seed_db(tmp_path)
+    body = _get(db_path).text
+    assert "Winnow" in body
+    for label in ("Feed", "Settings", "Audit"):
+        assert f">{label}</a>" in body
+    assert "active" in _nav_link(body, "Feed")
+    assert "active" not in _nav_link(body, "Settings")
+    assert "active" not in _nav_link(body, "Audit")
+
+
+def test_detail_has_sticky_nav_with_feed_active(tmp_path):
+    db_path = _seed_db(tmp_path)
+    conn = connect(str(db_path))
+    channel_id = _channel(conn, "Chan", "chan1")
+    video_id = _video(conn, "vid123", channel_id, title="Navigable")
+    _score(conn, video_id, _flat(8.0), overall=8.0)
+    conn.commit()
+    conn.close()
+
+    body = _get_detail(db_path, "vid123").text
+    for label in ("Feed", "Settings", "Audit"):
+        assert f">{label}</a>" in body
+    assert "active" in _nav_link(body, "Feed")
+
+
+def test_settings_has_sticky_nav_with_settings_active(tmp_path):
+    db_path = _seed_db(tmp_path)
+    body = _get_settings(db_path).text
+    for label in ("Feed", "Settings", "Audit"):
+        assert f">{label}</a>" in body
+    assert "active" in _nav_link(body, "Settings")
+    assert "active" not in _nav_link(body, "Feed")
+
+
+def test_calibration_has_sticky_nav_with_audit_active(tmp_path):
+    db_path = _seed_db(tmp_path)
+    body = _get_calibration(db_path).text
+    for label in ("Feed", "Settings", "Audit"):
+        assert f">{label}</a>" in body
+    assert "active" in _nav_link(body, "Audit")
+    assert "active" not in _nav_link(body, "Feed")

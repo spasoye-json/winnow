@@ -1,3 +1,64 @@
+:root {
+  --winnow-accent: #22796f;
+}
+
+.topnav {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: var(--pico-background-color);
+  border-bottom: 1px solid var(--pico-muted-border-color);
+}
+
+.topnav-inner {
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+  max-width: var(--pico-container-max-width, 960px);
+  margin: 0 auto;
+  padding: 0 1rem;
+  height: 56px;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--pico-color);
+  text-decoration: none;
+}
+
+.brand-mark {
+  width: 11px;
+  height: 11px;
+  border-radius: 3px;
+  background: var(--winnow-accent);
+}
+
+.brand-name {
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.topnav-links {
+  display: flex;
+  gap: 0.25rem;
+}
+
+.nav-link {
+  padding: 1rem 0.6rem;
+  font-size: 0.9rem;
+  font-weight: 500;
+  color: var(--pico-muted-color);
+  text-decoration: none;
+  border-bottom: 2px solid transparent;
+}
+
+.nav-link.active {
+  color: var(--winnow-accent);
+  border-bottom-color: var(--winnow-accent);
+}
+
 .feed-card {
   display: grid;
   grid-template-columns: 168px 1fr;

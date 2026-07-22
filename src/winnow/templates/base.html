@@ -9,6 +9,21 @@
     <script src="/static/htmx.min.js" defer></script>
   </head>
   <body>
+    {% set path = request.url.path %}
+    {% set active_nav = "settings" if path.startswith("/settings") else "audit" if path.startswith("/calibration") else "feed" %}
+    <nav class="topnav">
+      <div class="topnav-inner">
+        <a class="brand" href="/">
+          <span class="brand-mark" aria-hidden="true"></span>
+          <span class="brand-name">Winnow</span>
+        </a>
+        <div class="topnav-links">
+          <a href="/" class="nav-link{% if active_nav == 'feed' %} active{% endif %}">Feed</a>
+          <a href="/settings" class="nav-link{% if active_nav == 'settings' %} active{% endif %}">Settings</a>
+          <a href="/calibration" class="nav-link{% if active_nav == 'audit' %} active{% endif %}">Audit</a>
+        </div>
+      </div>
+    </nav>
     <main>
       {% block content %}{% endblock %}
     </main>
