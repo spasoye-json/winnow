@@ -464,6 +464,88 @@ def test_detail_effective_score_recomputed_from_weights(tmp_path):
     assert "8.0" in body
 
 
+def test_detail_shows_large_overall_score_with_caption(tmp_path):
+    db_path = _seed_db(tmp_path)
+    conn = connect(str(db_path))
+    channel_id = _channel(conn, "Chan", "chan1")
+    video_id = _video(conn, "vid", channel_id, title="Passing one")
+    _score(conn, video_id, _flat(8.0), overall=8.0)
+    conn.commit()
+    conn.close()
+
+    body = _get_detail(db_path, "vid").text
+    assert "8.0" in body
+    assert "overall / 10" in body
+    assert "overall muted" not in body
+
+
+def test_detail_overall_score_muted_below_threshold(tmp_path):
+    db_path = _seed_db(tmp_path)
+    conn = connect(str(db_path))
+    channel_id = _channel(conn, "Chan", "chan1")
+    video_id = _video(conn, "vid", channel_id, title="Failing one")
+    _score(conn, video_id, _flat(3.0), overall=3.0)
+    conn.commit()
+    conn.close()
+
+    body = _get_detail(db_path, "vid").text
+    assert "overall / 10" in body
+    assert "overall muted" in body
+
+
+def test_detail_hard_flag_banner_is_amber(tmp_path):
+    db_path = _seed_db(tmp_path)
+    conn = connect(str(db_path))
+    channel_id = _channel(conn, "Chan", "chan1")
+    video_id = _video(conn, "flagged", channel_id, title="Flagged one")
+    _score(conn, video_id, _flat(9.0), overall=9.0, hard_flags=["ai_voice"])
+    conn.commit()
+    conn.close()
+
+    body = _get_detail(db_path, "flagged").text
+    assert "hard-flag-banner" in body
+    assert "Hard flag: ai_voice" in body
+    assert "auto-failed regardless" in body
+
+
+def test_detail_breakdown_weights_are_percents_and_bars_colored_by_threshold(tmp_path):
+    db_path = _seed_db(tmp_path)
+    conn = connect(str(db_path))
+    channel_id = _channel(conn, "Chan", "chan1")
+    dims = {
+        "info_density": 8.0, "originality": 7.0, "clickbait_gap": 9.0,
+        "padding": 6.0, "depth": 5.0, "production": 4.0,
+    }
+    video_id = _video(conn, "vid", channel_id, title="Mixed")
+    _score(conn, video_id, dims, overall=7.0)
+    conn.commit()
+    conn.close()
+
+    body = _get_detail(db_path, "vid").text
+    for percent in ("25%", "20%", "15%", "5%"):
+        assert percent in body
+    assert body.count("breakdown-fill met") == 4
+
+
+def test_detail_footer_has_verdict_buttons_and_scoring_metadata_with_date(tmp_path):
+    db_path = _seed_db(tmp_path)
+    conn = connect(str(db_path))
+    channel_id = _channel(conn, "Chan", "chan1")
+    video_id = _video(conn, "vid", channel_id, title="Footer")
+    _score(conn, video_id, _flat(8.0), overall=8.0,
+           scored_at="2026-07-20T01:00:00+00:00")
+    conn.commit()
+    conn.close()
+
+    body = _get_detail(db_path, "vid").text
+    assert 'name="verdict" value="great"' in body
+    assert 'name="verdict" value="slop"' in body
+    assert "scoring-meta" in body
+    assert "gemini-3.1-flash-lite" in body
+    assert "prompt v1" in body
+    assert "scored Jul 20" in body
+
+
 def test_feed_filters_by_channel(tmp_path):
     db_path = _seed_db(tmp_path)
     conn = connect(str(db_path))
