@@ -75,7 +75,8 @@
   <h2>Scoring</h2>
   <div class="threshold-row">
     <span>Quality threshold</span>
-    <input type="range" name="threshold" min="0" max="10" step="0.1"
+    <input type="range" name="threshold" aria-label="Quality threshold"
+           min="0" max="10" step="0.1"
            value="{{ threshold_display }}"
            oninput="document.getElementById('threshold-readout').textContent = Number(this.value).toFixed(1)" />
     <output id="threshold-readout">{{ threshold_display }}</output>
@@ -88,7 +89,7 @@
       <label class="weight-row">
         <span>{{ w.label }}</span>
         <input type="number" name="{{ w.key }}" min="0" max="100" step="1"
-               value="{{ w.percent }}" />
+               value="{{ w.percent }}" oninput="updateWeightsSum()" />
         <span class="weight-unit">%</span>
       </label>
       {% endfor %}
@@ -101,6 +102,18 @@
   </div>
   <p class="settings-note">Changing the threshold or weights re-ranks the feed instantly, no re-scoring needed.</p>
 </form>
+
+<script>
+  function updateWeightsSum() {
+    var total = 0;
+    document.querySelectorAll(".weights-grid input").forEach(function (input) {
+      total += Number(input.value) || 0;
+    });
+    var message = document.querySelector(".weights-sum");
+    message.textContent = "Weights must sum to 100%, currently " + total + "%";
+    message.classList.toggle("warning", total !== 100);
+  }
+</script>
 
 {% if saved %}
 <script>

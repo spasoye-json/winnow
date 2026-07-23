@@ -1088,6 +1088,15 @@ def test_settings_threshold_readout_tracks_slider(tmp_path):
 
     slider = body.split('name="threshold"', 1)[1].split(">", 1)[0]
     assert "oninput" in slider
+    assert 'aria-label="Quality threshold"' in body
+
+
+def test_settings_weights_sum_tracks_inputs_live(tmp_path):
+    db_path = _seed_db(tmp_path)
+    body = _get_settings(db_path).text
+
+    assert body.count('oninput="updateWeightsSum()"') == len(DIMENSIONS)
+    assert "function updateWeightsSum()" in body
 
 
 def test_settings_form_persists_threshold_and_weights(tmp_path):
