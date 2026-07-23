@@ -58,7 +58,7 @@ SELECT_VIDEO = f"""
 SELECT v.yt_video_id, v.title, v.thumbnail_url, v.transcript_status, c.name,
        s.info_density, s.originality, s.clickbait_gap, s.padding, s.depth,
        s.production, s.summary, s.rationale, s.hard_flags, s.confidence,
-       s.model, s.prompt_version,{VERDICT_COLUMN}
+       s.model, s.prompt_version, s.scored_at,{VERDICT_COLUMN}
 FROM videos v
 LEFT JOIN channels c ON c.id = v.channel_id
 LEFT JOIN scores s ON s.id = (
@@ -473,7 +473,7 @@ def build_detail(conn, yt_video_id):
         return None
     (yt_id, title, thumbnail, status, channel, info, orig, click, pad, depth,
      prod, summary, rationale, flags_json, conf, model, prompt_version,
-     verdict) = row
+     scored_at, verdict) = row
     detail = {
         "youtube_url": YOUTUBE_WATCH_URL + yt_id,
         "title": title,
@@ -489,23 +489,29 @@ def build_detail(conn, yt_video_id):
         "padding": pad, "depth": depth, "production": prod,
     }
     weights = load_weights(conn)
+    threshold = load_threshold(conn)
     score = effective_score(dims, weights)
+    hard_flags = json.loads(flags_json) if flags_json else []
     detail.update({
         "score_display": f"{score:.1f}",
+        "passing": not hard_flags and score >= threshold,
         "dimensions": [
             {
                 "label": DIMENSION_LABELS[d],
                 "score_display": f"{dims[d]:.1f}",
-                "weight_display": f"{weights[d]:.2f}",
+                "weight_display": f"{round(weights[d] * 100)}%",
                 "pct": max(0.0, min(dims[d] * 10, 100.0)),
+                "passing": dims[d] >= threshold,
             }
             for d in DIMENSIONS
         ],
-        "hard_flags": json.loads(flags_json) if flags_json else [],
+        "hard_flags": hard_flags,
+        "auto_failed": ", ".join(hard_flags) if hard_flags else None,
         "summary": summary,
         "rationale": rationale,
         "model": model,
         "prompt_version": prompt_version,
+        "scored_display": _format_date(scored_at),
         "metadata_only": conf is not None and conf < FULL_CONFIDENCE,
         "verdict_url": f"/video/{yt_id}/verdict",
         "verdict": verdict,

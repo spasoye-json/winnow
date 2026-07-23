@@ -8,51 +8,48 @@
 <a href="{{ youtube_url }}"><img src="{{ thumbnail_url }}" alt="Thumbnail for {{ title }}" /></a>
 {% endif %}
 
-<header>
-  <h1>{{ title }}</h1>
-  {% if channel %}<p>{{ channel }}</p>{% endif %}
+<div class="detail-head">
+  <div class="detail-head-main">
+    <h1>{{ title }}</h1>
+    {% if channel %}<p class="card-meta">{{ channel }}</p>{% endif %}
+    <a href="{{ youtube_url }}" role="button">Watch on YouTube &nearr;</a>
+  </div>
   {% if scored %}
-  <p><span class="score-badge">{{ score_display }}</span> effective score, out of 10</p>
+  <div class="overall{% if not passing %} muted{% endif %}">
+    <span class="overall-score">{{ score_display }}</span>
+    <span class="overall-caption">overall / 10</span>
+  </div>
   {% endif %}
-  <a href="{{ youtube_url }}" role="button">Watch on YouTube &nearr;</a>
-</header>
+</div>
 
 {% if not scored %}
 <p>{{ reason }}</p>
 {% else %}
-
-{{ verdict_buttons(verdict_url, verdict) }}
 
 {% if metadata_only %}
 <p><span class="marker">🛈 metadata-only</span> Scored from metadata because no transcript was available.</p>
 {% endif %}
 
 {% if hard_flags %}
-<article>
-  <h2>Hard flags</h2>
-  <p>Suppressed from the feed regardless of score.</p>
-  <ul>
-    {% for flag in hard_flags %}<li>{{ flag }}</li>{% endfor %}
-  </ul>
-</article>
+<div class="hard-flag-banner">
+  <p class="hard-flag-title">Hard flag: {{ auto_failed }}</p>
+  <p class="hard-flag-note">This video auto-failed regardless of its rubric score.</p>
+</div>
 {% endif %}
 
 <h2>Score breakdown</h2>
-<table>
-  <thead>
-    <tr><th>Dimension</th><th>Weight</th><th>Score</th><th></th></tr>
-  </thead>
-  <tbody>
-    {% for dim in dimensions %}
-    <tr>
-      <td>{{ dim.label }}</td>
-      <td>{{ dim.weight_display }}</td>
-      <td>{{ dim.score_display }}</td>
-      <td><progress value="{{ dim.pct }}" max="100" aria-hidden="true"></progress></td>
-    </tr>
-    {% endfor %}
-  </tbody>
-</table>
+<div class="breakdown">
+  {% for dim in dimensions %}
+  <div class="breakdown-row">
+    <span class="breakdown-label">{{ dim.label }}</span>
+    <span class="breakdown-weight">{{ dim.weight_display }}</span>
+    <span class="breakdown-score">{{ dim.score_display }}</span>
+    <div class="breakdown-bar">
+      <div class="breakdown-fill{% if dim.passing %} met{% endif %}" style="width: {{ dim.pct }}%"></div>
+    </div>
+  </div>
+  {% endfor %}
+</div>
 
 <h2>Why this score</h2>
 <p>{{ rationale }}</p>
@@ -60,8 +57,9 @@
 <h2>Summary</h2>
 <p>{{ summary }}</p>
 
-<footer>
-  <p><small>{{ model }} &middot; prompt v{{ prompt_version }}</small></p>
+<footer class="detail-footer">
+  {{ verdict_buttons(verdict_url, verdict) }}
+  <span class="scoring-meta">{{ model }} &middot; prompt v{{ prompt_version }}{% if scored_display %} &middot; scored {{ scored_display }}{% endif %}</span>
 </footer>
 {% endif %}
 {% endblock %}
