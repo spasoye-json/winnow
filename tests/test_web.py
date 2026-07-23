@@ -1039,6 +1039,57 @@ def test_settings_defaults_match_prd_rubric(tmp_path):
         assert f'value="{percent}"' in field
 
 
+def test_settings_weights_in_two_column_grid(tmp_path):
+    db_path = _seed_db(tmp_path)
+    body = _get_settings(db_path).text
+    assert 'class="weights-grid"' in body
+
+
+def test_settings_weights_sum_message_shows_current_sum_without_warning(tmp_path):
+    db_path = _seed_db(tmp_path)
+    body = _get_settings(db_path).text
+
+    message = body.split('class="weights-sum', 1)[1].split("</span>", 1)[0]
+    assert "must sum to 100" in message
+    assert "100%" in message
+    assert "weights-sum warning" not in body
+
+
+def test_settings_weights_sum_message_warns_when_not_100(tmp_path):
+    db_path = _seed_db(tmp_path)
+    conn = connect(str(db_path))
+    _set_setting(conn, "weights", json.dumps({
+        "info_density": 0.5, "originality": 0.0, "clickbait_gap": 0.0,
+        "padding": 0.0, "depth": 0.0, "production": 0.0,
+    }))
+    conn.commit()
+    conn.close()
+
+    body = _get_settings(db_path).text
+    assert "weights-sum warning" in body
+    message = body.split('class="weights-sum', 1)[1].split("</span>", 1)[0]
+    assert "50%" in message
+
+
+def test_settings_save_flashes_saved(tmp_path):
+    db_path = _seed_db(tmp_path)
+
+    response = _post_settings(db_path, DEFAULT_SETTINGS_FORM)
+    assert ">Saved<" in response.text
+
+    plain = _get_settings(db_path).text
+    assert ">Saved<" not in plain
+    assert ">Save<" in plain
+
+
+def test_settings_threshold_readout_tracks_slider(tmp_path):
+    db_path = _seed_db(tmp_path)
+    body = _get_settings(db_path).text
+
+    slider = body.split('name="threshold"', 1)[1].split(">", 1)[0]
+    assert "oninput" in slider
+
+
 def test_settings_form_persists_threshold_and_weights(tmp_path):
     db_path = _seed_db(tmp_path)
 
@@ -1150,6 +1201,27 @@ def test_settings_lists_channels_with_excluded_and_exempt_checkboxes(tmp_path):
     assert "Exempt" in body
     assert 'name="excluded"' in body
     assert 'name="exempt"' in body
+
+
+def test_settings_add_channel_form_uses_url_or_handle_placeholder(tmp_path):
+    db_path = _seed_db(tmp_path)
+    body = _get_settings(db_path).text
+
+    add_form = body.split('action="/settings/channels"', 1)[1].split("</form>", 1)[0]
+    assert 'placeholder="Channel URL or @handle"' in add_form
+    assert ">Add</button>" in add_form
+
+
+def test_settings_source_rendered_as_pill(tmp_path):
+    db_path = _seed_db(tmp_path)
+    conn = connect(str(db_path))
+    _settings_channel(conn, "Subbed", "chan1", source="subscription")
+    _settings_channel(conn, "Manual One", "chan2", source="manual")
+    conn.close()
+
+    body = _get_settings(db_path).text
+    assert '<span class="pill">subscription</span>' in body
+    assert '<span class="pill">manual</span>' in body
 
 
 def test_settings_toggles_channel_excluded_and_exempt(tmp_path):

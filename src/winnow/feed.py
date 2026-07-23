@@ -110,16 +110,20 @@ SELECT_ACTIVE_TOPICS = "SELECT id, query FROM topics WHERE active = 1 ORDER BY i
 def build_settings(conn):
     weights = load_weights(conn)
     threshold = load_threshold(conn)
+    weight_rows = [
+        {
+            "key": d,
+            "label": DIMENSION_LABELS[d],
+            "percent": round(weights[d] * 100),
+        }
+        for d in DIMENSIONS
+    ]
+    weights_sum = sum(w["percent"] for w in weight_rows)
     return {
         "threshold_display": f"{threshold:.1f}",
-        "weights": [
-            {
-                "key": d,
-                "label": DIMENSION_LABELS[d],
-                "percent": round(weights[d] * 100),
-            }
-            for d in DIMENSIONS
-        ],
+        "weights": weight_rows,
+        "weights_sum": weights_sum,
+        "weights_ok": weights_sum == 100,
         "channels": [
             {
                 "yt_channel_id": cid,

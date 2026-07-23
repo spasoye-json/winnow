@@ -106,12 +106,13 @@ def create_app(db_path, client_secrets_path):
         return templates.TemplateResponse(request, "calibration.html", context)
 
     @app.get("/settings", response_class=HTMLResponse)
-    def settings_page(request: Request):
+    def settings_page(request: Request, saved: bool = False):
         conn = connect(db_path)
         try:
             context = build_settings(conn)
         finally:
             conn.close()
+        context["saved"] = saved
         return templates.TemplateResponse(request, "settings.html", context)
 
     @app.post("/settings")
@@ -137,7 +138,7 @@ def create_app(db_path, client_secrets_path):
             save_settings(conn, threshold, {k: v / 100 for k, v in weights.items()})
         finally:
             conn.close()
-        return RedirectResponse("/settings", status_code=303)
+        return RedirectResponse("/settings?saved=1", status_code=303)
 
     @app.post("/settings/channels")
     def add_manual_channel(yt_channel_id: str = Form(...)):

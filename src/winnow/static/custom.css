@@ -280,6 +280,97 @@
   margin: 0;
 }
 
+.add-source > button {
+  background: var(--winnow-accent);
+  border-color: var(--winnow-accent);
+  color: #fff;
+}
+
+.pill {
+  display: inline-block;
+  font-size: 0.75rem;
+  padding: 0.1rem 0.55rem;
+  border-radius: 999px;
+  background: var(--pico-muted-border-color);
+  color: var(--pico-muted-color);
+}
+
+.threshold-row {
+  display: flex;
+  align-items: center;
+  gap: 0.875rem;
+}
+
+.threshold-row input[type="range"] {
+  width: 260px;
+  margin: 0;
+  accent-color: var(--winnow-accent);
+}
+
+.threshold-row output {
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+.weights-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.625rem 2rem;
+  max-width: 620px;
+}
+
+.weight-row {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  margin: 0;
+}
+
+.weight-row span {
+  flex: 1;
+}
+
+.weight-row input {
+  width: 64px;
+  margin: 0;
+  text-align: right;
+}
+
+.weight-unit {
+  flex: none;
+  color: var(--pico-muted-color);
+}
+
+.save-row {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-top: 1.125rem;
+}
+
+.save-row button {
+  width: auto;
+  margin: 0;
+  background: var(--winnow-accent);
+  border-color: var(--winnow-accent);
+  color: #fff;
+}
+
+.weights-sum {
+  font-size: 0.85rem;
+  color: var(--pico-muted-color);
+}
+
+.weights-sum.warning {
+  color: var(--winnow-flag, #9a6b15);
+}
+
+.settings-note {
+  font-size: 0.8rem;
+  color: var(--pico-muted-color);
+  margin: 0.75rem 0 0;
+}
+
 .bar-failed {
   border-left: 4px solid var(--pico-del-color, #b3261e);
   padding: 0.75rem 1rem;
