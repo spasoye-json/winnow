@@ -17,7 +17,7 @@
 
 <div class="agreement-tiles">
   {% for t in tiles %}
-  <article class="agreement-tile{% if t.met %} met{% endif %}">
+  <article class="agreement-tile{% if t.met %} met{% elif t.below %} below{% endif %}">
     <div class="tile-head">
       <span>{{ t.label }}</span>
       {% if t.provisional %}<span class="marker provisional">Provisional</span>{% endif %}
@@ -49,7 +49,7 @@
       {% if d.channel %}<small>{{ d.channel }}</small>{% endif %}
     </span>
     <span><span class="marker verdict-tag verdict-{{ d.verdict }}">{{ d.verdict }}</span></span>
-    <span class="score">{{ d.score_display }}</span>
+    <span class="score{% if d.score_pass %} pass{% else %} fail{% endif %}">{{ d.score_display }}</span>
     <span class="dims">
       {% for dim in d.dimensions %}<span title="{{ dim.label }}">{{ dim.score_display }}</span>{% endfor %}
     </span>

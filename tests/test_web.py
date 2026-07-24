@@ -1697,6 +1697,80 @@ def test_calibration_scopes_to_current_model_and_prompt_in_footer(tmp_path):
     assert f"prompt v{PROMPT_VERSION}" in body
 
 
+def _tile_chunk(body, label):
+    chunks = body.split('<article class="agreement-tile')
+    return next(c for c in chunks if label in c)
+
+
+def test_calibration_tile_green_at_or_above_bar_amber_below(tmp_path):
+    db_path = _seed_db(tmp_path)
+    conn = connect(str(db_path))
+    ch = _channel(conn, "Chan", "chan1")
+    # 4 of 5 greats above threshold => 80% => at the bar => green/met
+    for i in range(4):
+        _judged(conn, ch, f"g{i}", _flat(8.0), "great")
+    _judged(conn, ch, "gbad", _flat(4.0), "great")
+    # 2 of 5 slops below threshold => 40% => below the bar => amber
+    for i in range(2):
+        _judged(conn, ch, f"s{i}", _flat(4.0), "slop")
+    for i in range(3):
+        _judged(conn, ch, f"sbad{i}", _flat(8.0), "slop")
+    conn.commit()
+    conn.close()
+
+    body = _get_calibration(db_path).text
+    assert _tile_chunk(body, "Greats above threshold").startswith(' met"')
+    assert _tile_chunk(body, "Slop below threshold").startswith(' below"')
+
+
+def test_calibration_disagreement_score_colored_by_pass_state(tmp_path):
+    db_path = _seed_db(tmp_path)
+    conn = connect(str(db_path))
+    ch = _channel(conn, "Chan", "chan1")
+    # great verdict but score below threshold => score is failing
+    _judged(conn, ch, "under", _flat(4.0), "great", title="Underscored great")
+    # slop verdict but score above threshold => score is passing
+    _judged(conn, ch, "over", _flat(8.0), "slop", title="Overscored slop")
+    conn.commit()
+    conn.close()
+
+    body = _get_calibration(db_path).text
+    under_score = body.split("Underscored great", 1)[1].split(
+        'class="score', 1)[1].split(">", 1)[0]
+    over_score = body.split("Overscored slop", 1)[1].split(
+        'class="score', 1)[1].split(">", 1)[0]
+    assert "fail" in under_score
+    assert "pass" in over_score
+
+
+def test_verdict_round_trip_moves_audit_tile_numbers(tmp_path):
+    db_path = _seed_db(tmp_path)
+    conn = connect(str(db_path))
+    ch = _channel(conn, "Chan", "chan1")
+    video_id = _video(conn, "vid123", ch, title="Round trip")
+    conn.execute(
+        "INSERT INTO scores (video_id, overall, info_density, originality, "
+        "clickbait_gap, padding, depth, production, hard_flags, summary, rationale, "
+        "confidence, model, prompt_version, scored_at) "
+        "VALUES (?, 0, 8, 8, 8, 8, 8, 8, '[]', 's', 'r', 1.0, "
+        "'gemini-3.1-flash-lite', ?, '2026-07-20T01:00:00+00:00')",
+        (video_id, PROMPT_VERSION),
+    )
+    conn.commit()
+    conn.close()
+
+    before = _get_calibration(db_path).text
+    assert "0 of 0 great verdicts scored above threshold" in before
+
+    response = _post_verdict(db_path, "vid123", "great")
+    assert response.status_code == 200
+    great_button = response.text.split('value="great"', 1)[1].split(">", 1)[0]
+    assert 'aria-pressed="true"' in great_button
+
+    after = _get_calibration(db_path).text
+    assert "1 of 1 great verdicts scored above threshold" in after
+
+
 def test_feed_links_to_calibration(tmp_path):
     db_path = _seed_db(tmp_path)
     body = _get(db_path).text
