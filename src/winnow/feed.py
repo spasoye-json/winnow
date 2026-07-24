@@ -248,6 +248,7 @@ def build_calibration(conn):
                 "channel": channel,
                 "verdict": verdict,
                 "score_display": f"{score:.1f}",
+                "score_pass": above,
                 "distance": abs(score - threshold),
                 "dimensions": [
                     {"abbr": DIMENSION_ABBREV[d], "label": DIMENSION_LABELS[d],
@@ -291,6 +292,7 @@ def _agreement_tile(label, agree, total, noun, direction, provisional):
             f"{total} of {CALIBRATION_FLOOR} verdicts needed"
             if total < CALIBRATION_FLOOR else None),
         "met": pct is not None and pct >= 80,
+        "below": pct is not None and pct < 80,
     }
 
 

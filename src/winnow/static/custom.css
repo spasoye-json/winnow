@@ -390,6 +390,10 @@
   border-color: var(--pico-ins-color, #2f7d54);
 }
 
+.agreement-tile.below {
+  border-color: var(--winnow-flag, #9a6b15);
+}
+
 .tile-head {
   display: flex;
   align-items: center;
@@ -440,6 +444,14 @@
   text-align: right;
   font-weight: 650;
   font-variant-numeric: tabular-nums;
+}
+
+.disagreement-row .score.pass {
+  color: var(--pico-ins-color, #2f7d54);
+}
+
+.disagreement-row .score.fail {
+  color: var(--winnow-flag, #9a6b15);
 }
 
 .disagreement-row .dims {
