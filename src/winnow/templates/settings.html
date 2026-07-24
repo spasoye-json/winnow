@@ -98,7 +98,7 @@
 
   <div class="save-row">
     <button type="submit">{% if saved %}Saved{% else %}Save{% endif %}</button>
-    <span class="weights-sum{% if not weights_ok %} warning{% endif %}">Weights must sum to 100%, currently {{ weights_sum }}%</span>
+    <span class="weights-sum{% if not weights_ok %} warning{% endif %}" aria-live="polite">Weights must sum to 100%, currently {{ weights_sum }}%</span>
   </div>
   <p class="settings-note">Changing the threshold or weights re-ranks the feed instantly, no re-scoring needed.</p>
 </form>

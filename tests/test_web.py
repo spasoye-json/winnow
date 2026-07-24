@@ -1051,7 +1051,7 @@ def test_settings_weights_sum_message_shows_current_sum_without_warning(tmp_path
 
     message = body.split('class="weights-sum', 1)[1].split("</span>", 1)[0]
     assert "must sum to 100" in message
-    assert "100%" in message
+    assert "currently 100%" in message
     assert "weights-sum warning" not in body
 
 
@@ -1068,7 +1068,7 @@ def test_settings_weights_sum_message_warns_when_not_100(tmp_path):
     body = _get_settings(db_path).text
     assert "weights-sum warning" in body
     message = body.split('class="weights-sum', 1)[1].split("</span>", 1)[0]
-    assert "50%" in message
+    assert "currently 50%" in message
 
 
 def test_settings_save_flashes_saved(tmp_path):
@@ -1097,6 +1097,9 @@ def test_settings_weights_sum_tracks_inputs_live(tmp_path):
 
     assert body.count('oninput="updateWeightsSum()"') == len(DIMENSIONS)
     assert "function updateWeightsSum()" in body
+
+    message_span = body.split('class="weights-sum', 1)[1].split(">", 1)[0]
+    assert 'aria-live="polite"' in message_span
 
 
 def test_settings_form_persists_threshold_and_weights(tmp_path):
