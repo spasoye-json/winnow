@@ -12,9 +12,9 @@
 <p>Excluding hides a channel from the feed without unsubscribing on YouTube.</p>
 
 <form method="post" action="/settings/channels" class="add-source">
-  <input type="text" name="yt_channel_id" placeholder="YouTube channel ID"
-         aria-label="Channel ID" required />
-  <button type="submit">Add channel</button>
+  <input type="text" name="yt_channel_id" placeholder="Channel URL or @handle"
+         aria-label="Channel URL or handle" required />
+  <button type="submit">Add</button>
 </form>
 
 <div class="channel-list">
@@ -29,7 +29,7 @@
   {% for c in channels %}
   <div class="channel-row">
     <span>{{ c.name }}</span>
-    <span>{{ c.source }}</span>
+    <span><span class="pill">{{ c.source }}</span></span>
     <form method="post" action="{{ c.toggle_url }}" class="channel-flags">
       <label>
         <input type="checkbox" name="excluded" value="1"
@@ -68,29 +68,60 @@
 <form method="post" action="/settings/topics" class="add-source">
   <input type="text" name="query" placeholder="Topic search query"
          aria-label="Topic search query" required />
-  <button type="submit">Add topic</button>
+  <button type="submit">Add</button>
 </form>
 
 <form method="post" action="/settings">
   <h2>Scoring</h2>
-  <label>
-    Quality threshold
-    <input type="range" name="threshold" min="0" max="10" step="0.1"
-           value="{{ threshold_display }}" />
-    <output>{{ threshold_display }}</output>
-  </label>
+  <div class="threshold-row">
+    <span>Quality threshold</span>
+    <input type="range" name="threshold" aria-label="Quality threshold"
+           min="0" max="10" step="0.1"
+           value="{{ threshold_display }}"
+           oninput="document.getElementById('threshold-readout').textContent = Number(this.value).toFixed(1)" />
+    <output id="threshold-readout">{{ threshold_display }}</output>
+  </div>
 
   <fieldset>
     <legend>Rubric weights (%)</legend>
-    {% for w in weights %}
-    <label>
-      {{ w.label }}
-      <input type="number" name="{{ w.key }}" min="0" max="100" step="1"
-             value="{{ w.percent }}" />
-    </label>
-    {% endfor %}
+    <div class="weights-grid">
+      {% for w in weights %}
+      <label class="weight-row">
+        <span>{{ w.label }}</span>
+        <input type="number" name="{{ w.key }}" min="0" max="100" step="1"
+               value="{{ w.percent }}" oninput="updateWeightsSum()" />
+        <span class="weight-unit">%</span>
+      </label>
+      {% endfor %}
+    </div>
   </fieldset>
 
-  <button type="submit">Save</button>
+  <div class="save-row">
+    <button type="submit">{% if saved %}Saved{% else %}Save{% endif %}</button>
+    <span class="weights-sum{% if not weights_ok %} warning{% endif %}" aria-live="polite">Weights must sum to 100%, currently {{ weights_sum }}%</span>
+  </div>
+  <p class="settings-note">Changing the threshold or weights re-ranks the feed instantly, no re-scoring needed.</p>
 </form>
+
+<script>
+  function updateWeightsSum() {
+    var total = 0;
+    document.querySelectorAll(".weights-grid input").forEach(function (input) {
+      total += Number(input.value) || 0;
+    });
+    var message = document.querySelector(".weights-sum");
+    message.textContent = "Weights must sum to 100%, currently " + total + "%";
+    message.classList.toggle("warning", total !== 100);
+  }
+</script>
+
+{% if saved %}
+<script>
+  setTimeout(function () {
+    var button = document.querySelector('form[action="/settings"] button[type="submit"]');
+    if (button) button.textContent = "Save";
+    history.replaceState(null, "", "/settings");
+  }, 1500);
+</script>
+{% endif %}
 {% endblock %}
